@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.*
+
+# Build outputs
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Vercel & Hosting local links
+.vercel/
+
+# Environment & Secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+*.crt
+.npmrc
+
+# Test, coverage & scratch outputs
+coverage/
+.vitest/
+playwright-report/
+test-results/
+tmp/
+scratch/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Editor & IDE local settings
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
+*.orig
