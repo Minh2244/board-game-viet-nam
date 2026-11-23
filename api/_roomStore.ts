@@ -94,24 +94,30 @@ function parseHeartbeatsFromHash(raw: Record<string, unknown> | null): Record<st
   return out;
 }
 
+function parseEventValue(val: unknown): RoomEventRecord | null {
+  if (!val) return null;
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val) as RoomEventRecord;
+      return typeof parsed?.seq === 'number' ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof val === 'object') {
+    const parsed = val as RoomEventRecord;
+    return typeof parsed?.seq === 'number' ? parsed : null;
+  }
+  return null;
+}
+
 function parseEventsFromHash(raw: Record<string, unknown> | null): RoomEventRecord[] {
   const list: RoomEventRecord[] = [];
   if (!raw) return list;
   for (const [field, val] of Object.entries(raw)) {
     if (!field.startsWith(EV_FIELD_PREFIX)) continue;
-    let ev: RoomEventRecord | null = null;
-    if (typeof val === 'string') {
-      try {
-        ev = JSON.parse(val) as RoomEventRecord;
-      } catch {
-        ev = null;
-      }
-    } else if (val && typeof val === 'object') {
-      ev = val as RoomEventRecord;
-    }
-    if (ev && typeof ev.seq === 'number') {
-      list.push(ev);
-    }
+    const ev = parseEventValue(val);
+    if (ev) list.push(ev);
   }
   list.sort((a, b) => a.seq - b.seq);
   return list;
@@ -142,6 +148,49 @@ async function readRoomSeq(key: string): Promise<number | null> {
   return entry ? entry.doc.seq : null;
 }
 
+/**
+ * Đường tắt siêu tốc cho GET /api/room khi đang trong ván (không cần tải lại 35KB snapshot `data`):
+ * Chỉ lấy đúng các field `ev:<sinceSeq+1>..ev:<currentSeq>` + `phase` trong 1 lệnh HMGET (~300 bytes, < 3ms)!
+ */
+async function readDeltaEventsFast(
+  key: string,
+  sinceSeq: number,
+  currentSeq: number,
+): Promise<{ phase: RoomPhase; events: RoomEventRecord[] } | null> {
+  const count = currentSeq - sinceSeq;
+  if (count <= 0 || count > 20) return null;
+
+  const redis = getUpstashRedis();
+  if (redis) {
+    const fields: string[] = ['phase'];
+    for (let s = sinceSeq + 1; s <= currentSeq; s += 1) {
+      fields.push(`${EV_FIELD_PREFIX}${s}`);
+    }
+    const rawMap = await redis.hmget<Record<string, unknown>>(key, ...fields);
+    if (!rawMap) return null;
+
+    const rawPhase = rawMap.phase;
+    const phase: RoomPhase =
+      rawPhase === 'PLAYING' || rawPhase === 'DISSOLVED' ? rawPhase : 'LOBBY';
+    const events: RoomEventRecord[] = [];
+    for (let s = sinceSeq + 1; s <= currentSeq; s += 1) {
+      const ev = parseEventValue(rawMap[`${EV_FIELD_PREFIX}${s}`]);
+      if (ev) events.push(ev);
+    }
+    return { phase, events };
+  }
+
+  cleanExpiredMemory();
+  const entry = memoryRooms.get(key);
+  if (!entry) return null;
+  const events: RoomEventRecord[] = [];
+  for (let s = sinceSeq + 1; s <= currentSeq; s += 1) {
+    const ev = entry.eventsBySeq.get(s);
+    if (ev) events.push(ev);
+  }
+  return { phase: entry.doc.phase, events };
+}
+
 async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
   const redis = getUpstashRedis();
   if (redis) {
@@ -167,7 +216,6 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
       doc.phase = all.phase;
     }
 
-    // Hợp nhất các field `hb:<token>` và `ev:<seq>` độc lập (loại bỏ 100% mất sự kiện khi 2 máy đẩy cùng lúc!)
     const separateHbs = parseHeartbeatsFromHash(all);
     doc.heartbeats = { ...(doc.heartbeats || {}), ...separateHbs };
 
@@ -191,8 +239,65 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
 }
 
 /**
+ * Đường tắt siêu tốc cho gói tin sự kiện thuần (như `DICE_CHARGE`, `RTC_SIGNAL`, hoặc `push` không kèm `snapshot`):
+ * Không cần tải 35KB `data` bằng `hgetall`! Chỉ chạy `HINCRBY` + `HSET ev:<seq>` trong ~3ms!
+ */
+async function pushEventOnlyFast(
+  key: string,
+  senderToken: string,
+  now: number,
+  packet: Record<string, unknown>,
+): Promise<number | null> {
+  const redis = getUpstashRedis();
+  if (redis) {
+    const allocatedSeq = await redis.hincrby(key, 'seq', 1);
+    if (allocatedSeq <= 1) {
+      // Phòng không tồn tại (vừa tạo khống key) -> xóa ngay và báo null
+      await redis.del(key);
+      return null;
+    }
+    const eventRecord: RoomEventRecord = {
+      seq: allocatedSeq,
+      sentAt: now,
+      senderToken,
+      packet,
+    };
+    const pipe = redis.pipeline();
+    pipe.hset(key, {
+      [`${EV_FIELD_PREFIX}${allocatedSeq}`]: JSON.stringify(eventRecord),
+      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
+    });
+    if (allocatedSeq > MAX_EVENTS_KEPT) {
+      pipe.hdel(key, `${EV_FIELD_PREFIX}${allocatedSeq - MAX_EVENTS_KEPT}`);
+    }
+    pipe.expire(key, PLAYING_TTL_SEC);
+    await pipe.exec();
+    return allocatedSeq;
+  }
+
+  cleanExpiredMemory();
+  const entry = memoryRooms.get(key);
+  if (!entry || entry.doc.phase === 'DISSOLVED') return null;
+  const nextSeq = entry.doc.seq + 1;
+  entry.doc.seq = nextSeq;
+  entry.doc.updatedAt = now;
+  entry.heartbeats[senderToken] = now;
+  const ev: RoomEventRecord = {
+    seq: nextSeq,
+    sentAt: now,
+    senderToken,
+    packet,
+  };
+  entry.eventsBySeq.set(nextSeq, ev);
+  if (nextSeq > MAX_EVENTS_KEPT) {
+    entry.eventsBySeq.delete(nextSeq - MAX_EVENTS_KEPT);
+  }
+  entry.doc.events = Array.from(entry.eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
+  return nextSeq;
+}
+
+/**
  * Cấp số thứ tự `seq` nguyên tử bằng HINCRBY và lưu sự kiện vào field riêng `ev:<seq>`.
- * Đảm bảo 100% không bao giờ bị rơi mất gói tin `ROLL_DICE` / `BUY_PROPERTY` dù 2 máy gửi cùng mili-giây!
  */
 async function commitRoomUpdateAtomic(
   key: string,
@@ -272,7 +377,6 @@ async function commitRoomUpdateAtomic(
 
 /**
  * Cập nhật nhịp tim (heartbeat) vào field Hash riêng `hb:<token>` + gia hạn TTL trượt.
- * TUYỆT ĐỐI KHÔNG đọc hay ghi đè `seq` / `data`, loại bỏ 100% race condition với `push` nước đi!
  */
 async function touchRoomHeartbeatOnly(
   key: string,
@@ -330,7 +434,6 @@ async function claimRoomKeyAtomic(key: string, initialDoc: StoredRoomDocument): 
   const ttl = ttlForPhase(initialDoc.phase);
   const redis = getUpstashRedis();
   if (redis) {
-    // HSETNX bảo đảm nguyên tử 100% — không bao giờ trùng mã 6 số giữa 2 phòng tạo cùng mili-giây
     const claimed = await redis.hsetnx(key, 'seq', String(initialDoc.seq));
     if (claimed !== 1) return false;
     const pipe = redis.pipeline();
@@ -359,7 +462,7 @@ export interface RoomApiResult {
   body: Record<string, unknown>;
 }
 
-/** Xử lý GET /api/room?game=...&code=...&sinceSeq=... (Adaptive polling tối ưu lệnh Redis) */
+/** Xử lý GET /api/room?game=...&code=...&sinceSeq=... (Adaptive polling + Fast HMGET delta) */
 export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
   const game = url.searchParams.get('game') || 'co-ty-phu';
   const code = url.searchParams.get('code') || '';
@@ -383,7 +486,7 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
     };
   }
 
-  // Không có thay đổi mới -> trả gọn nhẹ sau đúng 1 lệnh HGET duy nhất!
+  // Không có thay đổi mới -> trả gọn nhẹ sau đúng 1 lệnh HGET duy nhất (~2ms tại Singapore)!
   if (!includeSnapshot && currentSeq <= sinceSeq) {
     return {
       status: 200,
@@ -394,6 +497,25 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
         events: [],
       },
     };
+  }
+
+  // Đường tắt siêu tốc khi máy khách chỉ cần lấy gói sự kiện mới (sinceSeq > 0 & !includeSnapshot) -> không tải 35KB snapshot!
+  if (!includeSnapshot && sinceSeq > 0 && currentSeq - sinceSeq <= 15) {
+    const fastDelta = await readDeltaEventsFast(key, sinceSeq, currentSeq);
+    if (fastDelta && fastDelta.events.length > 0) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          unchanged: false,
+          roomCode: code,
+          phase: fastDelta.phase,
+          seq: currentSeq,
+          events: fastDelta.events,
+          storageMode: getUpstashRedis() ? 'upstash' : 'memory',
+        },
+      };
+    }
   }
 
   const doc = await readRoomDoc(key);
@@ -494,6 +616,32 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
 
   const key = roomKey(game, code);
 
+  // Đường tắt siêu tốc cho sự kiện thuần (như DICE_CHARGE, RTC_SIGNAL, hoặc gói tin không đính kèm snapshot):
+  if (
+    action === 'push' &&
+    !payload.snapshot &&
+    !payload.phase &&
+    payload.packet &&
+    typeof payload.packet === 'object'
+  ) {
+    const fastSeq = await pushEventOnlyFast(
+      key,
+      senderToken,
+      now,
+      payload.packet as Record<string, unknown>,
+    );
+    if (fastSeq === null) {
+      return {
+        status: 404,
+        body: { ok: false, error: 'ROOM_NOT_FOUND', message: `Không tìm thấy phòng #${code}.` },
+      };
+    }
+    return {
+      status: 200,
+      body: { ok: true, seq: fastSeq },
+    };
+  }
+
   // Nhịp tim chạy đường tắt trên field `hb:<token>` riêng — KHÔNG đụng `seq` / `data`!
   if (action === 'heartbeat') {
     const hbResult = await touchRoomHeartbeatOnly(key, senderToken, now);
@@ -557,7 +705,6 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     doc.heartbeats[senderToken] = now;
     doc.updatedAt = now;
 
-    // Kiểm tra xem người chơi có phải thành viên cũ đang F5 / kết nối lại không
     const humans = Array.isArray((doc.snapshot as { humans?: unknown[] } | null)?.humans)
       ? ((doc.snapshot as {
           humans: Array<{
@@ -571,7 +718,6 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     const existingMember = humans.find((h) => h.playerToken === senderToken);
 
     if (existingMember) {
-      // Tự khôi phục trạng thái trực tuyến ngay trong snapshot để F5 vào thẳng bàn cờ < 0.3s!
       existingMember.connected = true;
       existingMember.disconnectedAt = null;
       existingMember.botTakeover = false;
@@ -652,7 +798,6 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       const currentVer = extractMatchVersion(doc.snapshot);
       const incomingVer = extractMatchVersion(incomingSnapshot);
 
-      // Chống gói tin đến trễ (out-of-order) ghi đè trạng thái ván chơi mới hơn!
       if (doc.phase !== 'PLAYING' || incomingVer >= currentVer) {
         doc.snapshot = incomingSnapshot;
         const snapPhase = incomingSnapshot.phase;

@@ -48,6 +48,7 @@ import { saveOfflineGame } from '../lobby/offlineSave';
 import {
   ONLINE_DISCONNECT_GRACE_MS,
   type OnlineRoomSnapshot,
+  type RemoteDiceChargeEvent,
   type RemoteGameActionEvent,
 } from '../network/onlineRoomClient';
 import { MonopolySceneController } from '../scene/MonopolySceneController';
@@ -83,6 +84,8 @@ export interface OnlineGameContext {
   snapshot: OnlineRoomSnapshot;
   onCommitLocalAction: (action: GameAction, rollPower: number, nextState: GameState) => void;
   registerRemoteActionHandler: (fn: (ev: RemoteGameActionEvent) => void) => () => void;
+  onBroadcastDiceCharge?: (playerId: string, playerName: string, active: boolean, charge01: number) => void;
+  registerRemoteDiceChargeHandler?: (fn: (ev: RemoteDiceChargeEvent) => void) => () => void;
   onDissolveRoom: () => void;
 }
 
@@ -917,12 +920,15 @@ export function GameBoardView({
   const [isBoardShaking, setIsBoardShaking] = useState(false);
   const [liveDice, setLiveDice] = useState<{ values: number[]; isDouble: boolean } | null>(null);
 
-  // Trạng thái Nhấn giữ nạp lực chạm sân giữa để tung xúc xắc
+  // Trạng thái Nhấn giữ nạp lực chạm sân giữa để tung xúc xắc (đồng bộ cả khi người chơi khác đang gồng!)
   const [chargeLevel, setChargeLevel] = useState(0);
   const [isChargingHold, setIsChargingHold] = useState(false);
+  const [remoteCharge, setRemoteCharge] = useState<{ playerName: string; level: number } | null>(null);
   const pointerDownTimeRef = useRef<number | null>(null);
   const chargeRafRef = useRef<number>(0);
   const lastChargeTickRef = useRef<number>(0);
+  const lastChargeBroadcastRef = useRef<number>(0);
+  const wasLocalChargingRef = useRef<boolean>(false);
   const lastRollPowerRef = useRef<number>(0.58);
 
   const { stageW, stageH, scale, rotated, isCompactDevice, toLocalRect } =
@@ -1739,6 +1745,7 @@ export function GameBoardView({
       if (isAnimatingRef.current) return;
       isAnimatingRef.current = true;
       setBotThought(null);
+      setRemoteCharge(null);
       setIsAnimating(true);
 
       const prevState = latestStateRef.current;
@@ -1760,9 +1767,13 @@ export function GameBoardView({
       const nextState = remoteOverride ? remoteOverride.resultingState : reducedState;
       latestStateRef.current = nextState;
 
-      // Phát tán ngay nước đi lên phòng Online để mọi người cùng xem hoạt ảnh đồng bộ
+      // Phát tán ngay nước đi lên phòng Online (P2P DataChannel + Singapore Redis) để mọi người cùng xem hoạt ảnh đồng bộ
       if (online && !remoteOverride) {
         online.onCommitLocalAction(resolvedAction, rollPower, nextState);
+        // Đệm đồng bộ ~60ms trên máy người vừa tung để gói tin kịp sang điện thoại/máy bạn -> CẢ 2 MÀN HÌNH CÙNG RƠI XÚC XẮC 3D ĐÚNG 1 NHỊP!
+        if (events.some((e) => e.type === 'DICE_ROLLED')) {
+          await new Promise((r) => setTimeout(r, 60));
+        }
       }
 
       const prevPositions = new Map<string, number>(prevState.players.map((p) => [p.id, p.position]));
@@ -2070,6 +2081,7 @@ export function GameBoardView({
   useEffect(() => {
     if (!onlineContext) return;
     return onlineContext.registerRemoteActionHandler((ev) => {
+      setRemoteCharge(null);
       if (isAnimatingRef.current) {
         remoteQueueRef.current.push(ev);
       } else {
@@ -2077,6 +2089,22 @@ export function GameBoardView({
       }
     });
   }, [onlineContext, dispatchAction]);
+
+  // Đăng ký nhận hiệu ứng đối phương đang nhấn giữ gồng/lắc xúc xắc lơ lửng giữa không trung
+  useEffect(() => {
+    if (!onlineContext?.registerRemoteDiceChargeHandler) return;
+    return onlineContext.registerRemoteDiceChargeHandler((ev) => {
+      if (isAnimatingRef.current) return;
+      if (ev.active) {
+        setRemoteCharge({ playerName: ev.playerName, level: ev.charge01 });
+        sceneRef.current?.setDiceCharging(true, ev.charge01);
+        gameAudio.playDiceChargeTick(ev.charge01);
+      } else {
+        setRemoteCharge(null);
+        sceneRef.current?.setDiceCharging(false, 0);
+      }
+    });
+  }, [onlineContext]);
 
   // Xác định máy hiện tại có đảm nhận điều khiển Bot (và ghế người chơi rớt mạng > 2 phút) trong phòng Online hay không
   const isOnlineBotCoordinator = (() => {
@@ -2251,6 +2279,13 @@ export function GameBoardView({
     setIsChargingHold(false);
     setChargeLevel(0);
     sceneRef.current?.setDiceCharging(false, 0);
+    if (wasLocalChargingRef.current) {
+      wasLocalChargingRef.current = false;
+      const cur = latestStateRef.current.players[latestStateRef.current.currentPlayerIndex];
+      if (cur) {
+        onlineContextRef.current?.onBroadcastDiceCharge?.(cur.id, cur.name, false, 0);
+      }
+    }
   }, []);
 
   const handleCenterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -2260,12 +2295,14 @@ export function GameBoardView({
 
     pointerDownTimeRef.current = performance.now();
     lastChargeTickRef.current = 0;
+    lastChargeBroadcastRef.current = 0;
 
     const tickCharge = (now: number) => {
       if (pointerDownTimeRef.current === null) return;
       const heldMs = now - pointerDownTimeRef.current;
       if (heldMs >= 130) {
         const p = Math.min(1, (heldMs - 130) / 1050);
+        wasLocalChargingRef.current = true;
         setIsChargingHold(true);
         setChargeLevel(p);
         sceneRef.current?.setDiceCharging(true, p);
@@ -2274,6 +2311,14 @@ export function GameBoardView({
         if (now - lastChargeTickRef.current >= tickInterval) {
           lastChargeTickRef.current = now;
           gameAudio.playDiceChargeTick(p);
+        }
+
+        if (now - lastChargeBroadcastRef.current >= 75) {
+          lastChargeBroadcastRef.current = now;
+          const cur = latestStateRef.current.players[latestStateRef.current.currentPlayerIndex];
+          if (cur) {
+            onlineContextRef.current?.onBroadcastDiceCharge?.(cur.id, cur.name, true, p);
+          }
         }
       }
       chargeRafRef.current = requestAnimationFrame(tickCharge);
@@ -2720,11 +2765,11 @@ export function GameBoardView({
 
                 {/* Vòng sóng mời chạm + Vòng tròn nạp lực nằm đúng tâm sân xúc xắc */}
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  {canHumanTapRoll && !isChargingHold && (
+                  {canHumanTapRoll && !isChargingHold && !remoteCharge && (
                     <div className="animate-tap-ring h-44 w-44 rounded-full border-2 border-amber-300/60" />
                   )}
 
-                  {isChargingHold && (
+                  {(isChargingHold || remoteCharge) && (
                     <svg
                       viewBox="0 0 120 120"
                       className="h-52 w-52 -rotate-90 drop-shadow-[0_0_12px_rgba(251,191,36,0.75)]"
@@ -2742,11 +2787,13 @@ export function GameBoardView({
                         cy="60"
                         r="52"
                         fill="none"
-                        stroke={chargeLevel > 0.72 ? '#F59E0B' : '#38BDF8'}
+                        stroke={(isChargingHold ? chargeLevel : remoteCharge?.level ?? 0) > 0.72 ? '#F59E0B' : '#38BDF8'}
                         strokeWidth="6.5"
                         strokeLinecap="round"
                         strokeDasharray={2 * Math.PI * 52}
-                        strokeDashoffset={2 * Math.PI * 52 * (1 - chargeLevel)}
+                        strokeDashoffset={
+                          2 * Math.PI * 52 * (1 - (isChargingHold ? chargeLevel : remoteCharge?.level ?? 0))
+                        }
                       />
                     </svg>
                   )}
@@ -2778,6 +2825,10 @@ export function GameBoardView({
                 {isChargingHold ? (
                   <div className="rounded-full border border-amber-300/90 bg-slate-950/92 px-3.5 py-1 text-[11px] font-black text-amber-300 shadow-xl">
                     ⚡ ĐANG LẮC NẠP LỰC {Math.round(chargeLevel * 100)}% — THẢ TAY ĐỂ NÉM!
+                  </div>
+                ) : remoteCharge ? (
+                  <div className="rounded-full border border-cyan-300/90 bg-slate-950/92 px-3.5 py-1 text-[11px] font-black text-cyan-200 shadow-xl">
+                    🎲 {remoteCharge.playerName.toUpperCase()} ĐANG LẮC XÚC XẮC {Math.round(remoteCharge.level * 100)}%...
                   </div>
                 ) : liveDice ? (
                   <div

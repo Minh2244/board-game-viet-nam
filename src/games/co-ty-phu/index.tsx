@@ -37,6 +37,7 @@ import {
   type OnlineRoomSnapshot,
   type OnlineTransportStatus,
   type PersistedOnlineSession,
+  type RemoteDiceChargeEvent,
   type RemoteGameActionEvent,
 } from './network/onlineRoomClient';
 import { GameBoardView, type OnlineGameContext } from './ui/GameBoardView';
@@ -237,6 +238,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
 
   const onlineClientRef = useRef<OnlineRoomClient | null>(null);
   const remoteActionHandlerRef = useRef<((ev: RemoteGameActionEvent) => void) | null>(null);
+  const remoteDiceChargeHandlerRef = useRef<((ev: RemoteDiceChargeEvent) => void) | null>(null);
 
   const { muted, toggleMute } = useAudioStore();
 
@@ -326,6 +328,9 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           },
           onRemoteAction: (ev) => {
             remoteActionHandlerRef.current?.(ev);
+          },
+          onRemoteDiceCharge: (ev) => {
+            remoteDiceChargeHandlerRef.current?.(ev);
           },
           onRoomClosed: (reason) => {
             onlineClientRef.current = null;
@@ -485,9 +490,28 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     [],
   );
 
+  const registerRemoteDiceChargeHandler = useCallback(
+    (fn: (ev: RemoteDiceChargeEvent) => void) => {
+      remoteDiceChargeHandlerRef.current = fn;
+      return () => {
+        if (remoteDiceChargeHandlerRef.current === fn) {
+          remoteDiceChargeHandlerRef.current = null;
+        }
+      };
+    },
+    [],
+  );
+
   const handleCommitLocalOnlineAction = useCallback(
     (action: GameAction, rollPower: number, nextState: GameState) => {
       onlineClientRef.current?.broadcastCommittedAction(action, rollPower, nextState);
+    },
+    [],
+  );
+
+  const handleBroadcastOnlineDiceCharge = useCallback(
+    (playerId: string, playerName: string, active: boolean, charge01: number) => {
+      onlineClientRef.current?.broadcastDiceCharge(playerId, playerName, active, charge01);
     },
     [],
   );
@@ -535,6 +559,8 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
         snapshot: onlineSnapshot,
         onCommitLocalAction: handleCommitLocalOnlineAction,
         registerRemoteActionHandler,
+        onBroadcastDiceCharge: handleBroadcastOnlineDiceCharge,
+        registerRemoteDiceChargeHandler,
         onDissolveRoom: handleDissolveOnlineRoom,
       };
     }

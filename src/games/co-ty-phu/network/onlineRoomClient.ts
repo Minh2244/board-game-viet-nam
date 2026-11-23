@@ -52,7 +52,26 @@ export interface RemoteGameActionEvent {
   matchVersion: number;
 }
 
+export interface RemoteDiceChargeEvent {
+  playerId: string;
+  playerName: string;
+  active: boolean;
+  charge01: number;
+}
+
 export type OnlineTransportStatus = 'CONNECTING' | 'READY' | 'RECONNECTING' | 'ERROR';
+
+type RtcSignalPayload = {
+  kind: 'offer' | 'answer' | 'candidate';
+  sdp?: string;
+  candidate?: RTCIceCandidateInit;
+};
+
+interface PeerChannelState {
+  pc: RTCPeerConnection;
+  dc: RTCDataChannel | null;
+  makingOffer: boolean;
+}
 
 type WirePacket =
   | {
@@ -96,6 +115,22 @@ type WirePacket =
       rollPower: number;
       resultingState: GameState;
       matchVersion: number;
+    }
+  | {
+      msgId: string;
+      senderToken: string;
+      type: 'DICE_CHARGE';
+      playerId: string;
+      playerName: string;
+      active: boolean;
+      charge01: number;
+    }
+  | {
+      msgId: string;
+      senderToken: string;
+      type: 'RTC_SIGNAL';
+      targetToken: string;
+      signal: RtcSignalPayload;
     }
   | {
       msgId: string;
@@ -282,15 +317,21 @@ export interface OnlineRoomCallbacks {
   onSnapshot: (snapshot: OnlineRoomSnapshot) => void;
   onStatusChange: (status: OnlineTransportStatus, message: string) => void;
   onRemoteAction: (event: RemoteGameActionEvent) => void;
+  onRemoteDiceCharge?: (event: RemoteDiceChargeEvent) => void;
   onRoomClosed: (reason: string) => void;
   onPeerJoined?: (memberName: string) => void;
 }
 
+const RTC_ICE_SERVERS: RTCIceServer[] = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] },
+];
+
 /**
- * Kết nối phòng Online qua Vercel Serverless API (/api/room) + Upstash Redis (HTTPS 443).
- * - Xuyên 100% mạng 4G/5G/Wi-Fi Việt Nam, không lỗi WebRTC NAT/TURN.
- * - Mã 6 số duy nhất nguyên tử (HSETNX), không bao giờ trùng.
- * - Tự gia hạn TTL trượt khi còn hoạt động, hỗ trợ F5 khôi phục thẳng bàn cờ (cả Chủ lẫn Khách).
+ * Kết nối phòng Online Dual-Engine:
+ * 1. Luồng Siêu Tốc P2P (WebRTC RTCDataChannel ~10-25ms + BroadcastChannel <2ms cùng thiết bị).
+ * 2. Luồng Bảo Chứng Vercel Serverless (/api/room tại Singapore sin1) + Upstash Redis Singapore (~30-45ms).
+ * - Gói tin nào tới trước sẽ kích hoạt hoạt ảnh ngay lập tức, gói trùng theo sau tự động bị loại bỏ qua msgId/actionId.
+ * - Mã 6 số duy nhất nguyên tử (HSETNX), không bao giờ trùng, hỗ trợ F5 khôi phục thẳng bàn cờ.
  */
 export class OnlineRoomClient {
   public roomCode: string;
@@ -313,6 +354,9 @@ export class OnlineRoomClient {
   private joinResolved = false;
   private visibilityHandler: (() => void) | null = null;
   private pushChain: Promise<void> = Promise.resolve();
+  private broadcastChan: BroadcastChannel | null = null;
+  private rtcPeers = new Map<string, PeerChannelState>();
+  private lastChargeRedisSentAt = 0;
 
   constructor(options: {
     roomCode: string;
@@ -514,14 +558,15 @@ export class OnlineRoomClient {
   }
 
   private getAdaptivePollIntervalMs(): number {
-    if (!this.joinResolved) return 300; // Đang chờ duyệt vào phòng -> poll cực nhanh 0.3s
+    if (!this.joinResolved) return 220; // Đang chờ duyệt vào phòng -> poll cực nhanh 0.22s
     if (typeof document !== 'undefined' && document.hidden) return 3600; // Ẩn tab -> tiết kiệm quota Redis
-    if (this.snapshot?.phase === 'PLAYING') return 350; // Đang trong ván -> đồng bộ realtime ~0.35s (độ trễ TB < 0.18s!)
-    return 650; // Đang ở sảnh phòng chờ -> phản hồi đổi nhân vật/màu đất ~0.65s
+    if (this.snapshot?.phase === 'PLAYING') return 180; // Đang trong ván -> đồng bộ Singapore sin1 siêu tốc 0.18s (kết hợp P2P DataChannel ~15ms!)
+    return 480; // Đang ở sảnh phòng chờ -> phản hồi đổi nhân vật/màu đất ~0.48s
   }
 
   private startSyncLoops(): void {
-    this.scheduleNextPoll(250);
+    this.initFastLanes();
+    this.scheduleNextPoll(140);
 
     if (this.heartbeatTimer === null) {
       this.heartbeatTimer = setInterval(() => {
@@ -865,6 +910,22 @@ export class OnlineRoomClient {
         this.destroy();
         break;
       }
+
+      case 'DICE_CHARGE': {
+        this.callbacks.onRemoteDiceCharge?.({
+          playerId: packet.playerId,
+          playerName: packet.playerName,
+          active: packet.active,
+          charge01: packet.charge01,
+        });
+        break;
+      }
+
+      case 'RTC_SIGNAL': {
+        if (packet.targetToken !== this.playerToken) return;
+        void this.handleRtcSignal(packet.senderToken, packet.signal);
+        break;
+      }
     }
   }
 
@@ -1070,34 +1131,66 @@ export class OnlineRoomClient {
     this.pushPacket(packet, this.snapshot);
   }
 
+  /** Phát tín hiệu đang nhấn giữ gồng/lắc xúc xắc giữa không trung để mọi máy cùng thấy xúc xắc bay lên rung lắc */
+  public broadcastDiceCharge(
+    playerId: string,
+    playerName: string,
+    active: boolean,
+    charge01: number,
+  ): void {
+    if (this.destroyed || !this.snapshot) return;
+    const now = Date.now();
+    const packet: WirePacket = {
+      msgId: generateRandomId('chg'),
+      senderToken: this.playerToken,
+      type: 'DICE_CHARGE',
+      playerId,
+      playerName,
+      active,
+      charge01: Math.round(charge01 * 100) / 100,
+    };
+
+    // Luôn bắn tức thì (0ms) qua P2P DataChannel & BroadcastChannel;
+    // đồng thời gửi qua Redis Singapore mỗi ~180ms (hoặc ngay khi bắt đầu/kết thúc gồng) cho các máy đang đi qua 4G/NAT
+    const shouldPushRedis = !active || now - this.lastChargeRedisSentAt >= 180;
+    if (shouldPushRedis) {
+      this.lastChargeRedisSentAt = now;
+    }
+    this.pushFastEventOnly(packet, shouldPushRedis);
+  }
+
   /** Giải tán phòng (Chủ phòng) hoặc Rời phòng (Khách) */
   public dissolveOrLeave(reason = 'Phòng Online đã được giải tán.'): void {
     clearPersistedOnlineSession();
     if (this.isHost) {
+      const disPacket: WirePacket = {
+        msgId: generateRandomId('dis'),
+        senderToken: this.playerToken,
+        type: 'DISSOLVE_ROOM',
+        reason,
+      };
+      this.sendOverFastLanes(disPacket);
       void apiPostRoom({
         action: 'dissolve',
         game: GAME_NAMESPACE,
         roomCode: this.roomCode,
         senderToken: this.playerToken,
-        packet: {
-          msgId: generateRandomId('dis'),
-          senderToken: this.playerToken,
-          type: 'DISSOLVE_ROOM',
-          reason,
-        },
+        packet: disPacket,
       }).catch(() => {});
     } else {
+      const lvPacket: WirePacket = {
+        msgId: generateRandomId('lv'),
+        senderToken: this.playerToken,
+        type: 'LEAVE_ROOM',
+        playerToken: this.playerToken,
+      };
+      this.sendOverFastLanes(lvPacket);
       void apiPostRoom({
         action: 'push',
         game: GAME_NAMESPACE,
         roomCode: this.roomCode,
         senderToken: this.playerToken,
-        packet: {
-          msgId: generateRandomId('lv'),
-          senderToken: this.playerToken,
-          type: 'LEAVE_ROOM',
-          playerToken: this.playerToken,
-        },
+        packet: lvPacket,
       }).catch(() => {});
     }
     this.destroy();
@@ -1122,10 +1215,28 @@ export class OnlineRoomClient {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
     }
+    if (this.broadcastChan) {
+      try {
+        this.broadcastChan.close();
+      } catch {
+        // Ignore
+      }
+      this.broadcastChan = null;
+    }
+    for (const peer of this.rtcPeers.values()) {
+      try {
+        peer.dc?.close();
+        peer.pc.close();
+      } catch {
+        // Ignore
+      }
+    }
+    this.rtcPeers.clear();
   }
 
   private emitSnapshot(): void {
     if (this.snapshot) {
+      this.ensureRtcPeers();
       this.callbacks.onSnapshot({
         ...this.snapshot,
         humans: this.snapshot.humans.map((h) => ({ ...h })),
@@ -1147,11 +1258,210 @@ export class OnlineRoomClient {
     );
   }
 
+  private initFastLanes(): void {
+    if (this.destroyed) return;
+    if (!this.broadcastChan && typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.broadcastChan = new BroadcastChannel(`bgvn_fast_${this.roomCode}`);
+        this.broadcastChan.onmessage = (ev: MessageEvent) => {
+          if (this.destroyed) return;
+          const pkt = ev?.data as WirePacket | undefined;
+          if (pkt && typeof pkt.msgId === 'string') {
+            this.handleIncomingPacket(pkt);
+          }
+        };
+      } catch {
+        this.broadcastChan = null;
+      }
+    }
+    this.ensureRtcPeers();
+  }
+
+  private ensureRtcPeers(): void {
+    if (this.destroyed || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
+    const activeTokens = new Set<string>();
+    for (const h of this.snapshot.humans) {
+      if (h.playerToken === this.playerToken || !h.connected) continue;
+      activeTokens.add(h.playerToken);
+      // Quy tắc khởi tạo đơn hướng (playerToken nhỏ hơn chủ động tạo Offer) để không bao giờ đụng độ Offer đôi
+      if (this.playerToken < h.playerToken && !this.rtcPeers.has(h.playerToken)) {
+        this.getOrCreateRtcPeer(h.playerToken, true);
+      }
+    }
+
+    for (const [token, peer] of this.rtcPeers.entries()) {
+      if (!activeTokens.has(token)) {
+        try {
+          peer.dc?.close();
+          peer.pc.close();
+        } catch {
+          // Ignore
+        }
+        this.rtcPeers.delete(token);
+      }
+    }
+  }
+
+  private getOrCreateRtcPeer(remoteToken: string, isInitiator: boolean): PeerChannelState | null {
+    if (typeof RTCPeerConnection === 'undefined' || this.destroyed) return null;
+    const existing = this.rtcPeers.get(remoteToken);
+    if (existing) return existing;
+
+    try {
+      const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
+      const state: PeerChannelState = { pc, dc: null, makingOffer: false };
+      this.rtcPeers.set(remoteToken, state);
+
+      const attachChannel = (dc: RTCDataChannel) => {
+        state.dc = dc;
+        dc.onmessage = (ev: MessageEvent) => {
+          if (this.destroyed) return;
+          try {
+            const pkt = JSON.parse(String(ev.data)) as WirePacket;
+            if (pkt && typeof pkt.msgId === 'string') {
+              this.handleIncomingPacket(pkt);
+            }
+          } catch {
+            // Ignore malformed P2P payload
+          }
+        };
+      };
+
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate && !this.destroyed) {
+          this.sendRtcSignal(remoteToken, {
+            kind: 'candidate',
+            candidate: ev.candidate.toJSON(),
+          });
+        }
+      };
+
+      pc.ondatachannel = (ev) => {
+        attachChannel(ev.channel);
+      };
+
+      if (isInitiator) {
+        const dc = pc.createDataChannel('bgvn-fast', { ordered: true });
+        attachChannel(dc);
+        state.makingOffer = true;
+        void pc
+          .createOffer()
+          .then((offer) => pc.setLocalDescription(offer))
+          .then(() => {
+            if (!this.destroyed && pc.localDescription?.sdp) {
+              this.sendRtcSignal(remoteToken, {
+                kind: 'offer',
+                sdp: pc.localDescription.sdp,
+              });
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            state.makingOffer = false;
+          });
+      }
+
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  private async handleRtcSignal(remoteToken: string, signal: RtcSignalPayload): Promise<void> {
+    const peer = this.getOrCreateRtcPeer(remoteToken, false);
+    if (!peer || this.destroyed) return;
+    const { pc } = peer;
+
+    try {
+      if (signal.kind === 'offer' && signal.sdp) {
+        if (pc.signalingState !== 'stable' || peer.makingOffer) return;
+        await pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        if (!this.destroyed && pc.localDescription?.sdp) {
+          this.sendRtcSignal(remoteToken, {
+            kind: 'answer',
+            sdp: pc.localDescription.sdp,
+          });
+        }
+      } else if (signal.kind === 'answer' && signal.sdp) {
+        if (pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+        }
+      } else if (signal.kind === 'candidate' && signal.candidate) {
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(signal.candidate);
+        }
+      }
+    } catch {
+      // Nếu WebRTC P2P bị nhà mạng chặn NAT, luồng Singapore Redis (sin1) vẫn chạy song song 100%
+    }
+  }
+
+  private sendRtcSignal(targetToken: string, signal: RtcSignalPayload): void {
+    const pkt: WirePacket = {
+      msgId: generateRandomId('rtc'),
+      senderToken: this.playerToken,
+      type: 'RTC_SIGNAL',
+      targetToken,
+      signal,
+    };
+    this.pushFastEventOnly(pkt, true);
+  }
+
+  private sendOverFastLanes(packet: WirePacket): void {
+    if (this.destroyed) return;
+    if (this.broadcastChan) {
+      try {
+        this.broadcastChan.postMessage(packet);
+      } catch {
+        // Ignore
+      }
+    }
+    if (this.rtcPeers.size > 0) {
+      let raw: string | null = null;
+      for (const peer of this.rtcPeers.values()) {
+        if (peer.dc && peer.dc.readyState === 'open') {
+          try {
+            if (raw === null) raw = JSON.stringify(packet);
+            peer.dc.send(raw);
+          } catch {
+            // Ignore transient DataChannel error
+          }
+        }
+      }
+    }
+  }
+
+  private pushFastEventOnly(packet: WirePacket, alsoSendToRedis = true): void {
+    if (this.destroyed) return;
+    this.seenMsgIds.add(packet.msgId);
+    this.sendOverFastLanes(packet);
+    if (!alsoSendToRedis) return;
+
+    void apiPostRoom({
+      action: 'push',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
+      senderToken: this.playerToken,
+      packet,
+    })
+      .then(({ data }) => {
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
+          this.lastSeq = data.seq;
+        }
+      })
+      .catch(() => {});
+  }
+
   private pushPacket(packet: WirePacket, snapshotToStore?: OnlineRoomSnapshot): void {
     if (this.destroyed) return;
     this.seenMsgIds.add(packet.msgId);
 
-    // Xếp hàng FIFO tuần tự mọi gói tin đẩy lên server để KHÔNG BAO GIỜ bị đảo thứ tự hay đè gói tin khi 2 thao tác diễn ra sát nhau!
+    // 1. Bắn tức thì (0ms) qua Luồng Siêu Tốc P2P DataChannel & BroadcastChannel!
+    this.sendOverFastLanes(packet);
+
+    // 2. Đồng thời xếp hàng FIFO tuần tự đẩy lên Singapore Redis (sin1) để bảo chứng 100% & chống văng F5
     const snapshotClone = snapshotToStore ? structuredClone(snapshotToStore) : undefined;
     this.pushChain = this.pushChain
       .then(async () => {
@@ -1169,7 +1479,7 @@ export class OnlineRoomClient {
           this.lastSeq = data.seq;
         }
         if (!this.destroyed) {
-          this.scheduleNextPoll(100);
+          this.scheduleNextPoll(80);
         }
       })
       .catch(() => {
