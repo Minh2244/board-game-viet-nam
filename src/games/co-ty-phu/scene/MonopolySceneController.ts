@@ -8,20 +8,31 @@ interface ConfettiPiece {
   rotSpeed: THREE.Vector3;
 }
 
+/**
+ * Bộ điều khiển WebGL 3D cho Xúc xắc & Pháo hoa Chiến thắng.
+ * Tối ưu mạnh cho điện thoại:
+ * - On-demand rendering: chỉ chạy vòng lặp requestAnimationFrame khi xúc xắc đang tung/nạp lực hoặc bắn pháo hoa;
+ *   lúc xúc xắc đứng im dừng hẳn WebGL loop (0% GPU!).
+ * - Chế độ Mượt (lowPowerMode — tự bật trên ĐT): pixelRatio = 1, tắt shadow map pass kép và giảm số hạt va chạm.
+ */
 export class MonopolySceneController {
   private readonly container: HTMLElement;
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly diceActor: DiceActor3D;
+  private readonly shadowFloor: THREE.Mesh;
   private readonly confetti: ConfettiPiece[] = [];
   private disposed = false;
   private rafId = 0;
+  private loopRunning = false;
+  private lowPowerMode = false;
   private lastTime = performance.now();
   private resizeObserver: ResizeObserver;
 
-  constructor(container: HTMLElement, initialState: GameState) {
+  constructor(container: HTMLElement, initialState: GameState, lowPowerMode = false) {
     this.container = container;
+    this.lowPowerMode = lowPowerMode;
 
     const width = Math.max(200, container.clientWidth);
     const height = Math.max(150, container.clientHeight);
@@ -31,14 +42,16 @@ export class MonopolySceneController {
     this.positionCamera(width, height);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: !lowPowerMode,
       alpha: true,
-      powerPreference: 'high-performance',
+      powerPreference: lowPowerMode ? 'default' : 'high-performance',
     });
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.setPixelRatio(
+      lowPowerMode ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+    );
+    this.renderer.shadowMap.enabled = !lowPowerMode;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -47,23 +60,35 @@ export class MonopolySceneController {
     this.setupLighting();
 
     // Mặt sàn hứng bóng đổ trong suốt rộng khắp toàn Sân Giữa
-    const shadowFloor = new THREE.Mesh(
+    this.shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(28, 28),
       new THREE.ShadowMaterial({ opacity: 0.34 }),
     );
-    shadowFloor.rotation.x = -Math.PI / 2;
-    shadowFloor.position.y = 0;
-    shadowFloor.receiveShadow = true;
-    this.scene.add(shadowFloor);
+    this.shadowFloor.rotation.x = -Math.PI / 2;
+    this.shadowFloor.position.y = 0;
+    this.shadowFloor.receiveShadow = true;
+    this.shadowFloor.visible = !lowPowerMode;
+    this.scene.add(this.shadowFloor);
 
-    this.diceActor = new DiceActor3D(initialState.diceCount);
+    this.diceActor = new DiceActor3D(initialState.diceCount, lowPowerMode);
     this.diceActor.setImmediateValues(initialState.lastDiceValues);
     this.scene.add(this.diceActor.group);
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
 
-    this.animate();
+    // Render 1 khung hình đầu tiên sắc nét rồi nghỉ (không đốt GPU 60fps khi đứng yên)
+    this.renderSingleFrame();
+  }
+
+  public setLowPowerMode(enabled: boolean): void {
+    if (this.disposed || this.lowPowerMode === enabled) return;
+    this.lowPowerMode = enabled;
+    this.diceActor.setLowPowerMode(enabled);
+    this.renderer.setPixelRatio(enabled ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.shadowMap.enabled = !enabled;
+    this.shadowFloor.visible = !enabled;
+    this.renderSingleFrame();
   }
 
   private positionCamera(width: number, height: number): void {
@@ -76,7 +101,7 @@ export class MonopolySceneController {
   }
 
   private setupLighting(): void {
-    const hemi = new THREE.HemisphereLight('#FFFDF5', '#0F172A', 1.25);
+    const hemi = new THREE.HemisphereLight('#FFFDF5', '#0F172A', 1.3);
     this.scene.add(hemi);
 
     const sun = new THREE.DirectionalLight('#FFF7ED', 1.85);
@@ -101,22 +126,43 @@ export class MonopolySceneController {
     this.scene.add(goldRim);
   }
 
+  private renderSingleFrame(): void {
+    if (this.disposed) return;
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  private ensureLoopRunning(): void {
+    if (this.disposed || this.loopRunning) return;
+    this.loopRunning = true;
+    this.lastTime = performance.now();
+    this.rafId = requestAnimationFrame(this.animate);
+  }
+
   public setDiceCharging(active: boolean, charge01: number): void {
     this.diceActor.setCharging(active, charge01);
+    if (active) {
+      this.ensureLoopRunning();
+    } else {
+      this.renderSingleFrame();
+    }
   }
 
   public setImmediateDice(values: number[]): void {
     this.diceActor.setImmediateValues(values);
+    this.renderSingleFrame();
   }
 
   public animateDiceRoll(values: number[], isDouble: boolean, power01 = 0.6): Promise<void> {
-    return this.diceActor.animateRoll(values, isDouble, power01);
+    const promise = this.diceActor.animateRoll(values, isDouble, power01);
+    this.ensureLoopRunning();
+    return promise;
   }
 
   public triggerVictoryFireworks(): void {
     const colors = ['#34D399', '#FBBF24', '#38BDF8', '#F472B6', '#A78BFA'];
     const geo = new THREE.BoxGeometry(0.14, 0.14, 0.04);
-    for (let i = 0; i < 64; i += 1) {
+    const count = this.lowPowerMode ? 28 : 64;
+    for (let i = 0; i < count; i += 1) {
       const mat = new THREE.MeshBasicMaterial({ color: colors[i % colors.length] });
       const m = new THREE.Mesh(geo, mat);
       m.position.set((Math.random() - 0.5) * 1.8, 0.3, (Math.random() - 0.5) * 1.4);
@@ -131,6 +177,7 @@ export class MonopolySceneController {
         rotSpeed: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8),
       });
     }
+    this.ensureLoopRunning();
   }
 
   private handleResize(): void {
@@ -139,11 +186,11 @@ export class MonopolySceneController {
     const height = Math.max(150, this.container.clientHeight);
     this.positionCamera(width, height);
     this.renderer.setSize(width, height);
+    this.renderSingleFrame();
   }
 
   private animate = (): void => {
     if (this.disposed) return;
-    this.rafId = requestAnimationFrame(this.animate);
 
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
@@ -164,10 +211,19 @@ export class MonopolySceneController {
 
     this.diceActor.update(dt);
     this.renderer.render(this.scene, this.camera);
+
+    // Tự động dừng vòng lặp WebGL ngay khi mọi chuyển động 3D kết thúc -> 0% GPU lúc đứng yên!
+    if (this.diceActor.isActive() || this.confetti.length > 0) {
+      this.rafId = requestAnimationFrame(this.animate);
+    } else {
+      this.loopRunning = false;
+      this.rafId = 0;
+    }
   };
 
   public dispose(): void {
     this.disposed = true;
+    this.loopRunning = false;
     cancelAnimationFrame(this.rafId);
     this.resizeObserver.disconnect();
     this.diceActor.dispose();

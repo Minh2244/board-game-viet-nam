@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   BookOpen,
   Bot,
-  Crown,
   Dices,
   Gavel,
-  History,
   Home,
   Lock,
   Maximize2,
@@ -17,11 +16,12 @@ import {
   User,
   Volume2,
   VolumeX,
-  X,
+  Zap,
 } from 'lucide-react';
 import { useAudioStore } from '@/shared/audio/soundEngine';
 import { cryptoRandomInt } from '@/shared/crypto/random';
 import { useLandscapeStage } from '@/shared/ui/LandscapeViewport';
+import cornerJailUrl from '../assets/special/corner_jail.webp';
 import { computeBotAction } from '../ai/smartBot';
 import { gameAudio } from '../audio/gameAudio';
 import { COLOR_GROUPS } from '../data/boardData';
@@ -30,10 +30,10 @@ import { getLandmarkArtworkUrl } from '../data/landmarkArtwork';
 import { reduceGameAction } from '../engine/reducer';
 import {
   AUCTION_BID_INCREMENT,
-  evaluateEdgeProgress,
   formatShortVnd,
   formatVnd,
   getAuctionBidDelta,
+  getMatchPointWarnings,
   getSellBuildingValue,
   getSellPropertyValue,
   getTotalLiquidatableValue,
@@ -41,9 +41,15 @@ import {
   JAIL_BAIL_FEE,
   JAIL_TILE_INDEX,
   playerOwnsFullColorGroup,
+  type MatchPointWarning,
 } from '../engine/rules';
 import type { BoardTile, CardDeckKind, GameAction, GameAnimEvent, GameState, PlayerState } from '../engine/types';
 import { saveOfflineGame } from '../lobby/offlineSave';
+import {
+  ONLINE_DISCONNECT_GRACE_MS,
+  type OnlineRoomSnapshot,
+  type RemoteGameActionEvent,
+} from '../network/onlineRoomClient';
 import { MonopolySceneController } from '../scene/MonopolySceneController';
 import {
   CashTransferOverlay,
@@ -57,7 +63,6 @@ import {
   CentralBankBuildingSvg,
   ChanceSymbolSvg,
   CornerAirplaneIcon,
-  CornerGoIcon,
   CornerGoToJailIcon,
   CornerJailIcon,
   FateSymbolSvg,
@@ -71,8 +76,19 @@ import {
   TaxStampIcon,
 } from './TileIcons';
 
+export interface OnlineGameContext {
+  roomCode: string;
+  localPlayerId: string | null;
+  isHost: boolean;
+  snapshot: OnlineRoomSnapshot;
+  onCommitLocalAction: (action: GameAction, rollPower: number, nextState: GameState) => void;
+  registerRemoteActionHandler: (fn: (ev: RemoteGameActionEvent) => void) => () => void;
+  onDissolveRoom: () => void;
+}
+
 interface GameBoardViewProps {
   initialState: GameState;
+  onlineContext?: OnlineGameContext;
   onRestartSameSetup: () => void;
   onBackToLobby: () => void;
 }
@@ -162,13 +178,14 @@ function shortTileTitle(name: string): string {
     .toLocaleUpperCase('vi-VN');
 }
 
-/** Một ô trên vành đai bàn cờ hình chữ nhật chuẩn 17×11 (Retro Vivid cổ điển + hiệu ứng hiện đại) */
-function BoardTileCell({
+/** Một ô trên vành đai bàn cờ hình chữ nhật chuẩn 17×11 (bọc React.memo để không render lại 52 ô khi quân cờ nhảy) */
+const BoardTileCell = memo(function BoardTileCell({
   tile,
   allTiles,
   players,
   isFlashing,
   isNewlyBuilt,
+  matchPointWarning,
   onSelect,
   registerTileRef,
 }: {
@@ -177,6 +194,7 @@ function BoardTileCell({
   players: readonly PlayerState[];
   isFlashing: boolean;
   isNewlyBuilt: boolean;
+  matchPointWarning?: MatchPointWarning;
   onSelect: (index: number) => void;
   registerTileRef: (el: HTMLButtonElement | null) => void;
 }) {
@@ -256,27 +274,106 @@ function BoardTileCell({
     );
   };
 
-  // 4 Ô Góc lớn (0: Khởi Hành, 16: Trại Giam, 26: Sân Bay Quốc Tế, 42: Vô Tù)
+  // 4 Ô Góc lớn (0: Khởi Hành Bản A Cổ Điển Sạch Đẹp, 16: Trại Giam, 26: Sân Bay Quốc Tế, 42: Vô Tù)
   if (tile.edge === null) {
-    let cornerBg = 'linear-gradient(145deg, #D97706 0%, #9A3412 100%)';
-    let title = 'KHỞI HÀNH';
-    let sub = '+3 Tr đ';
+    if (tile.kind === 'GO') {
+      return (
+        <button
+          ref={registerTileRef}
+          type="button"
+          data-tile-index={tile.index}
+          data-testid="corner-go-tile"
+          onClick={() => onSelect(tile.index)}
+          style={{
+            gridColumn: col + 1,
+            gridRow: row + 1,
+            background: 'radial-gradient(circle at 50% 30%, #FFFBEB 0%, #FEF3C7 56%, #FDE68A 100%)',
+            borderColor: isFlashing ? '#FEF08A' : '#EAB308',
+          }}
+          className={`retro-tile-sheen relative flex flex-col items-center justify-between overflow-hidden rounded-[8px] border-2 px-1.5 py-1.5 text-center shadow-[0_6px_16px_rgba(0,0,0,0.55)] transition hover:brightness-105 cursor-pointer ${
+            isFlashing ? 'ring-4 ring-yellow-300 brightness-115 z-20' : ''
+          }`}
+        >
+          {/* Đường chỉ khung cổ điển */}
+          <div className="pointer-events-none absolute inset-[3px] rounded-[5px] border border-amber-700/30" />
+
+          {/* Dòng hướng dẫn + Chữ START cổ điển to đậm */}
+          <div className="relative z-10 w-full">
+            <div className="truncate text-[8px] leading-none font-extrabold uppercase tracking-[0.04em] text-amber-900 sm:text-[9px]">
+              Đi qua nhận +3 Tr đ
+            </div>
+            <div className="mt-0.5 text-[22px] leading-[0.95] font-black tracking-[0.06em] text-slate-900 drop-shadow-[0_1px_0_rgba(255,255,255,0.92)] sm:text-[26px]">
+              START
+            </div>
+          </div>
+
+          {/* Mũi tên đỏ cổ điển đậm nét chỉ sang trái (ô 1 Mộc Châu) */}
+          <svg
+            viewBox="0 0 160 42"
+            aria-hidden="true"
+            className="pointer-events-none relative z-10 h-[25px] w-[108px] shrink-0 drop-shadow-[0_2px_3px_rgba(127,29,29,0.38)] sm:h-[30px] sm:w-[126px]"
+          >
+            <defs>
+              <linearGradient id="goRedArrowGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#EF4444" />
+                <stop offset="100%" stopColor="#B91C1C" />
+              </linearGradient>
+            </defs>
+            <polygon
+              points="10,21 46,4 46,13 148,13 148,29 46,29 46,38"
+              fill="url(#goRedArrowGrad)"
+              stroke="#7F1D1D"
+              strokeWidth="2.6"
+              strokeLinejoin="round"
+            />
+            <line
+              x1="48"
+              y1="17"
+              x2="142"
+              y2="17"
+              stroke="#FECACA"
+              strokeWidth="2"
+              strokeLinecap="round"
+              opacity="0.65"
+            />
+          </svg>
+
+          {/* Nhãn chân ô gọn sắc nét */}
+          <div className="relative z-10 rounded-full bg-amber-950/92 px-2.5 py-[2px] text-[8.5px] leading-none font-black uppercase tracking-[0.08em] text-amber-200 shadow-sm sm:text-[9px]">
+            KHỞI HÀNH
+          </div>
+        </button>
+      );
+    }
+
+    let cornerBg = 'linear-gradient(155deg, #991B1B 0%, #450A0A 62%, #1E1B4B 100%)';
+    let borderHex = '#FCA5A5';
+    let title = 'TRẠI GIAM';
+    let sub = 'Thăm 500 Nghìn';
+    let subColor = 'text-rose-200';
+    let artImgUrl: string | null = null;
+
     if (tile.kind === 'VISIT_JAIL') {
-      cornerBg = 'linear-gradient(145deg, #991B1B 0%, #450A0A 100%)';
-      title = 'TRẠI GIAM';
-      sub = 'Thăm 500 Nghìn';
+      artImgUrl = cornerJailUrl;
+      const hasPrisoner = players.some((p) => !p.isBankrupt && p.inJail);
+      sub = hasPrisoner ? 'Thăm tù -500K' : 'Trống · Miễn phí';
+      subColor = hasPrisoner ? 'text-rose-200' : 'text-emerald-200';
     } else if (tile.kind === 'AIRPORT') {
-      cornerBg = 'linear-gradient(155deg, #38BDF8 0%, #0284C7 55%, #075985 100%)';
+      cornerBg = 'linear-gradient(155deg, #38BDF8 0%, #0284C7 55%, #0C4A6E 100%)';
+      borderHex = '#7DD3FC';
       const destName =
         tile.currentDestinationTileIndex !== undefined
           ? shortTileTitle(allTiles[tile.currentDestinationTileIndex]?.name ?? '')
           : '';
       title = destName || 'SÂN BAY';
-      sub = destName ? '✈ SÂN BAY' : 'BAY NGẪU NHIÊN';
+      sub = destName ? '✈ SÂN BAY · +3 TR' : 'BAY NGẪU NHIÊN · +3 TR';
+      subColor = 'text-amber-200';
     } else if (tile.kind === 'GO_TO_JAIL') {
-      cornerBg = 'linear-gradient(145deg, #475569 0%, #1E293B 100%)';
+      cornerBg = 'linear-gradient(155deg, #334155 0%, #1E293B 58%, #0F172A 100%)';
+      borderHex = '#94A3B8';
       title = 'VÔ TÙ';
       sub = 'Tới Trại Giam';
+      subColor = 'text-sky-200';
     }
 
     return (
@@ -289,54 +386,47 @@ function BoardTileCell({
           gridColumn: col + 1,
           gridRow: row + 1,
           background: cornerBg,
+          borderColor: isFlashing ? '#FEF08A' : borderHex,
         }}
-        className={`retro-tile-sheen relative flex flex-col items-center justify-between overflow-hidden rounded-[6px] border-2 p-1 text-center text-white shadow-md transition hover:brightness-110 cursor-pointer ${
-          isFlashing ? 'ring-4 ring-yellow-300 brightness-125 z-20' : 'border-[#EAB308]/75'
+        className={`retro-tile-sheen relative flex flex-col items-center justify-end overflow-hidden rounded-[8px] border-2 text-center text-white shadow-[0_6px_16px_rgba(0,0,0,0.55)] transition hover:brightness-110 cursor-pointer ${
+          isFlashing ? 'ring-4 ring-yellow-300 brightness-125 z-20' : ''
         }`}
       >
-        {tile.kind === 'VISIT_JAIL' ? (
-          <>
-            <CornerJailIcon className="h-[58%] w-full drop-shadow" />
-            <div className="relative z-10 text-[9px] leading-none font-black tracking-tight text-amber-100 sm:text-[10.5px]">
-              {title}
-            </div>
-            <div className="relative z-10 text-[7.5px] leading-none font-bold text-red-200/90 sm:text-[8.5px]">
-              {sub}
-            </div>
-          </>
-        ) : tile.kind === 'AIRPORT' ? (
-          <>
-            <div className="relative z-10 flex w-full items-center justify-center">
-              <CornerAirplaneIcon className="h-[34px] w-full drop-shadow-[0_3px_5px_rgba(0,0,0,0.45)] sm:h-[44px]" />
-            </div>
-            <div className="relative z-10 flex w-full flex-col items-center gap-[1px]">
-              <div className="max-w-full truncate pt-[2px] text-[8.5px] leading-[1.2] font-black tracking-tight text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)] sm:text-[10px]">
-                {title}
-              </div>
-              <div className="text-[7px] leading-none font-bold text-amber-200 drop-shadow sm:text-[8px]">
-                {sub}
-              </div>
-            </div>
-          </>
+        {artImgUrl ? (
+          <img
+            src={artImgUrl}
+            alt=""
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover object-top"
+          />
         ) : (
-          <>
-            <div className="relative z-10 flex items-center justify-center pt-0.5">
-              {tile.kind === 'GO' && <CornerGoIcon className="h-5 w-5 sm:h-7 sm:w-7" />}
-              {tile.kind === 'GO_TO_JAIL' && <CornerGoToJailIcon className="h-5 w-6 sm:h-6 sm:w-8" />}
-            </div>
-            <div className="relative z-10 text-[8.5px] leading-tight font-black tracking-tight text-amber-50 drop-shadow sm:text-[10.5px]">
-              {title}
-            </div>
-            <div className="relative z-10 text-[7.5px] leading-none font-bold text-amber-200/95 sm:text-[8.5px]">
-              {sub}
-            </div>
-          </>
+          <div className="pointer-events-none relative z-10 flex w-full flex-1 items-center justify-center px-1.5 pt-1">
+            {tile.kind === 'AIRPORT' && (
+              <CornerAirplaneIcon className="h-[52px] w-full drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] sm:h-[62px]" />
+            )}
+            {tile.kind === 'GO_TO_JAIL' && (
+              <CornerGoToJailIcon className="h-[52px] w-full drop-shadow-[0_4px_8px_rgba(0,0,0,0.55)] sm:h-[62px]" />
+            )}
+            {tile.kind === 'VISIT_JAIL' && <CornerJailIcon className="h-10 w-full" />}
+          </div>
         )}
+
+        {/* Dải nhãn chân ô tương phản cao với cỡ chữ to rõ sắc nét */}
+        <div className="relative z-10 mt-auto w-full bg-gradient-to-t from-slate-950/92 via-slate-950/72 to-transparent px-1 pt-3 pb-1.5">
+          <div className="max-w-full truncate text-[12px] leading-[1.15] font-black tracking-[0.04em] text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.98)] sm:text-[13.5px]">
+            {title}
+          </div>
+          <div
+            className={`mt-0.5 max-w-full truncate text-[9.5px] leading-none font-extrabold tracking-wide drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)] sm:text-[10.5px] ${subColor}`}
+          >
+            {sub}
+          </div>
+        </div>
       </button>
     );
   }
 
-  // Ô Cơ Hội (?) — Hoa văn cổ điển ánh mặt trời vàng đồng lộng lẫy
+  // Ô Cơ Hội (?) — Đồ họa 3D rực rỡ & Chữ To Rõ (thích ứng dáng Đứng trên/dưới & dáng Ngang trái/phải)
   if (tile.kind === 'CHANCE') {
     return (
       <button
@@ -347,22 +437,42 @@ function BoardTileCell({
         style={{
           gridColumn: col + 1,
           gridRow: row + 1,
-          background: 'radial-gradient(circle at 50% 35%, #F59E0B 0%, #B45309 62%, #6C2E0A 100%)',
+          background: isSide
+            ? 'radial-gradient(circle at 30% 50%, #F59E0B 0%, #B45309 64%, #6C2E0A 100%)'
+            : 'radial-gradient(circle at 50% 35%, #F59E0B 0%, #B45309 62%, #6C2E0A 100%)',
         }}
-        className={`retro-tile-sheen relative flex flex-col items-center justify-center overflow-hidden rounded-[6px] border-2 p-0.5 text-center text-white shadow-md transition hover:brightness-115 cursor-pointer ${
-          isFlashing ? 'ring-4 ring-yellow-200 brightness-125 z-20' : 'border-[#FDE68A]/80'
-        }`}
+        className={`retro-tile-sheen relative flex overflow-hidden rounded-[7px] border-2 text-white shadow-md transition hover:brightness-115 cursor-pointer ${
+          isSide
+            ? tile.edge === 1
+              ? 'flex-row items-center justify-start gap-1.5 pl-2 pr-8'
+              : 'flex-row-reverse items-center justify-start gap-1.5 pr-2 pl-8'
+            : 'flex-col items-center justify-between'
+        } ${isFlashing ? 'ring-4 ring-yellow-200 brightness-125 z-20' : 'border-[#FDE68A]/85'}`}
       >
-        <div className="pointer-events-none absolute inset-[2px] rounded-[4px] border border-amber-100/45" />
-        <ChanceSymbolSvg className="relative z-10 h-6 w-6 sm:h-8 sm:w-8 drop-shadow-[0_2px_6px_rgba(0,0,0,0.65)]" />
-        <span className="relative z-10 mt-0.5 rounded bg-amber-950/70 px-1.5 py-[1px] text-[6.5px] leading-none font-black uppercase tracking-wider text-amber-100 sm:text-[8px]">
-          CƠ HỘI
-        </span>
+        <div className="pointer-events-none absolute inset-[2px] rounded-[5px] border border-amber-100/40" />
+        <div className={`relative z-10 flex items-center justify-center ${isSide ? 'shrink-0' : 'flex-1 pt-1'}`}>
+          <ChanceSymbolSvg
+            className={`${
+              isSide ? 'h-8 w-8 sm:h-9 sm:w-9' : 'h-10 w-10 sm:h-12 sm:w-12'
+            } drop-shadow-[0_3px_7px_rgba(0,0,0,0.65)]`}
+          />
+        </div>
+        <div
+          className={`relative z-10 ${
+            isSide
+              ? 'min-w-0'
+              : 'w-full bg-slate-950/60 px-0.5 py-1.5 backdrop-blur-[1px]'
+          }`}
+        >
+          <span className="block whitespace-nowrap text-[10.5px] leading-none font-black uppercase tracking-[0.04em] text-amber-100 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
+            CƠ HỘI
+          </span>
+        </div>
       </button>
     );
   }
 
-  // Ô Khí Vận (!) — Hoa văn cổ điển huyền bí ánh tím pha lê & trăng sao
+  // Ô Khí Vận (!) — Quả cầu pha lê 3D tím huyền bí & Chữ To Rõ (dáng Đứng & dáng Ngang)
   if (tile.kind === 'FATE') {
     return (
       <button
@@ -373,17 +483,73 @@ function BoardTileCell({
         style={{
           gridColumn: col + 1,
           gridRow: row + 1,
-          background: 'radial-gradient(circle at 50% 35%, #8B5CF6 0%, #5B21B6 62%, #2E1065 100%)',
+          background: isSide
+            ? 'radial-gradient(circle at 30% 50%, #8B5CF6 0%, #5B21B6 64%, #2E1065 100%)'
+            : 'radial-gradient(circle at 50% 35%, #8B5CF6 0%, #5B21B6 62%, #2E1065 100%)',
         }}
-        className={`retro-tile-sheen relative flex flex-col items-center justify-center overflow-hidden rounded-[6px] border-2 p-0.5 text-center text-white shadow-md transition hover:brightness-115 cursor-pointer ${
-          isFlashing ? 'ring-4 ring-purple-200 brightness-125 z-20' : 'border-purple-200/70'
+        className={`retro-tile-sheen relative flex overflow-hidden rounded-[7px] border-2 text-white shadow-md transition hover:brightness-115 cursor-pointer ${
+          isSide
+            ? tile.edge === 1
+              ? 'flex-row items-center justify-start gap-1.5 pl-2 pr-8'
+              : 'flex-row-reverse items-center justify-start gap-1.5 pr-2 pl-8'
+            : 'flex-col items-center justify-between'
+        } ${isFlashing ? 'ring-4 ring-purple-200 brightness-125 z-20' : 'border-purple-200/80'}`}
+      >
+        <div className="pointer-events-none absolute inset-[2px] rounded-[5px] border border-purple-200/35" />
+        <div className={`relative z-10 flex items-center justify-center ${isSide ? 'shrink-0' : 'flex-1 pt-1'}`}>
+          <FateSymbolSvg
+            className={`${
+              isSide ? 'h-8 w-8 sm:h-9 sm:w-9' : 'h-10 w-10 sm:h-12 sm:w-12'
+            } drop-shadow-[0_3px_7px_rgba(0,0,0,0.7)]`}
+          />
+        </div>
+        <div
+          className={`relative z-10 ${
+            isSide
+              ? 'min-w-0'
+              : 'w-full bg-slate-950/60 px-0.5 py-1.5 backdrop-blur-[1px]'
+          }`}
+        >
+          <span className="block whitespace-nowrap text-[10.5px] leading-none font-black uppercase tracking-[0.04em] text-purple-100 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
+            KHÍ VẬN
+          </span>
+        </div>
+      </button>
+    );
+  }
+
+  // Ô Thuế — Con dấu kho bạc 3D đỏ vàng & Chữ To Rõ
+  if (tile.kind === 'TAX') {
+    const taxSub = tile.fixedTaxAmount
+      ? `-${formatShortVnd(tile.fixedTaxAmount).replace(' đ', '')}`
+      : '-200 Nghìn';
+    return (
+      <button
+        ref={registerTileRef}
+        type="button"
+        data-tile-index={tile.index}
+        onClick={() => onSelect(tile.index)}
+        style={{
+          gridColumn: col + 1,
+          gridRow: row + 1,
+          background: 'linear-gradient(155deg, #B91C1C 0%, #7F1D1D 58%, #450A0A 100%)',
+        }}
+        className={`retro-tile-sheen relative flex flex-col items-center justify-between overflow-hidden rounded-[7px] border-2 text-center text-white shadow-md transition hover:brightness-115 cursor-pointer ${
+          isFlashing ? 'ring-4 ring-rose-200 brightness-125 z-20' : 'border-rose-300/75'
         }`}
       >
-        <div className="pointer-events-none absolute inset-[2px] rounded-[4px] border border-purple-200/40" />
-        <FateSymbolSvg className="relative z-10 h-6 w-6 sm:h-8 sm:w-8 drop-shadow-[0_2px_6px_rgba(0,0,0,0.7)]" />
-        <span className="relative z-10 mt-0.5 rounded bg-purple-950/75 px-1.5 py-[1px] text-[6.5px] leading-none font-black uppercase tracking-wider text-purple-100 sm:text-[8px]">
-          KHÍ VẬN
-        </span>
+        <div className="pointer-events-none absolute inset-[2px] rounded-[5px] border border-amber-200/30" />
+        <div className="relative z-10 flex flex-1 items-center justify-center pt-1">
+          <TaxStampIcon className="h-9 w-9 drop-shadow-[0_3px_6px_rgba(0,0,0,0.65)] sm:h-11 sm:w-11" />
+        </div>
+        <div className="relative z-10 w-full bg-slate-950/65 px-0.5 py-1.5 backdrop-blur-[1px]">
+          <div className="text-[10.5px] leading-none font-black uppercase tracking-[0.05em] text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
+            THUẾ
+          </div>
+          <div className="mt-0.5 whitespace-nowrap text-[9px] leading-none font-extrabold text-amber-200 sm:text-[10px]">
+            {taxSub}
+          </div>
+        </div>
       </button>
     );
   }
@@ -393,7 +559,7 @@ function BoardTileCell({
   let groupHexColor = '#475569';
   let topTitle = shortTileTitle(tile.name);
   let priceText = '';
-  let specialIcon: 'AIRPORT' | 'STATION' | 'UTIL' | 'HERITAGE' | 'TAX' | null = null;
+  let specialIcon: 'AIRPORT' | 'STATION' | 'UTIL' | 'HERITAGE' | null = null;
   const landmarkUrl = getLandmarkArtworkUrl(tile.name);
 
   if (tile.kind === 'PROPERTY') {
@@ -434,14 +600,6 @@ function BoardTileCell({
     topTitle = 'DI SẢN';
     priceText = '+1 Tr';
     specialIcon = 'HERITAGE';
-  } else if (tile.kind === 'TAX') {
-    groupHexColor = '#B91C1C';
-    bgStyle = 'linear-gradient(155deg, #991B1B 0%, #581C20 100%)';
-    topTitle = 'THUẾ';
-    priceText = tile.fixedTaxAmount
-      ? `-${formatShortVnd(tile.fixedTaxAmount).replace(' đ', '')}`
-      : '-200 Nghìn';
-    specialIcon = 'TAX';
   }
 
   const contentPadding =
@@ -504,6 +662,7 @@ function BoardTileCell({
             src={landmarkUrl}
             alt=""
             aria-hidden="true"
+            decoding="async"
             className="pointer-events-none absolute inset-0 h-full w-full object-cover"
           />
           <div
@@ -526,6 +685,22 @@ function BoardTileCell({
       {/* Dải chủ sở hữu ngang hết ô đất (không ghi tên người mua hay N.x) + nhà/biệt thự */}
       {(tile.kind === 'PROPERTY' || tile.kind === 'AUCTION_STATION' || tile.kind === 'UTILITY') &&
         renderInnerSlot()}
+
+      {/* Cảnh báo NHẤP NHÁY ĐỎ–VÀNG khi có người chỉ còn thiếu đúng ô này là THẮNG NGAY! */}
+      {matchPointWarning && (
+        <>
+          <span
+            aria-hidden="true"
+            className="animate-matchpoint-overlay pointer-events-none absolute inset-0 z-30 rounded-[6px] border-[3px] border-rose-400 bg-rose-500/25 shadow-[inset_0_0_14px_rgba(251,191,36,0.95)]"
+          />
+          <span
+            title={`${matchPointWarning.playerName} chỉ còn thiếu ô này (${matchPointWarning.progressText}) là THẮNG NGAY!`}
+            className="animate-matchpoint-overlay pointer-events-none absolute inset-x-0.5 top-0.5 z-30 truncate rounded bg-rose-600/95 px-1 py-[1px] text-center text-[7px] font-black uppercase tracking-wider text-yellow-200 shadow"
+          >
+            ⚠ CÒN 1 Ô!
+          </span>
+        </>
+      )}
 
       {/* Huy hiệu ×2 nhỏ khi hoàn tất trọn bộ ô cùng nhóm màu */}
       {hasMonopoly && (
@@ -560,7 +735,6 @@ function BoardTileCell({
             {specialIcon === 'STATION' && <StationBusIcon className="h-3.5 w-3.5 drop-shadow" />}
             {specialIcon === 'UTIL' && <HydroPowerIcon className="h-3.5 w-3.5 drop-shadow" />}
             {specialIcon === 'HERITAGE' && <HeritageCitadelIcon className="h-3.5 w-3.5 drop-shadow" />}
-            {specialIcon === 'TAX' && <TaxStampIcon className="h-3.5 w-3.5 drop-shadow" />}
           </div>
         )}
 
@@ -583,7 +757,7 @@ function BoardTileCell({
       </div>
     </button>
   );
-}
+});
 
 /** Hiển thị số dư tiền chạy số mượt mà (rolling counter) kèm chớp sáng xanh/đỏ khi biến động */
 function AnimatedCashValue({ value, className = '' }: { value: number; className?: string }) {
@@ -684,15 +858,37 @@ function BoardVfxLayer({
 
 export function GameBoardView({
   initialState,
+  onlineContext,
   onRestartSameSetup,
   onBackToLobby,
 }: GameBoardViewProps) {
   const [displayState, setDisplayState] = useState<GameState>(initialState);
   const latestStateRef = useRef<GameState>(initialState);
   const [isAnimating, setIsAnimating] = useState(false);
+  const isAnimatingRef = useRef(false);
+  const remoteQueueRef = useRef<RemoteGameActionEvent[]>([]);
+  const onlineContextRef = useRef<OnlineGameContext | undefined>(onlineContext);
+  onlineContextRef.current = onlineContext;
+  const [nowClock, setNowClock] = useState<number>(() => Date.now());
   const [inspectTileIdx, setInspectTileIdx] = useState<number | null>(null);
   const [showRules, setShowRules] = useState(false);
-  const [showDrawer, setShowDrawer] = useState(false);
+  const [dramaBanner, setDramaBanner] = useState<{
+    id: number;
+    tone: 'gold' | 'danger' | 'cyan';
+    text: string;
+  } | null>(null);
+  const dramaBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showDramaBanner = useCallback((text: string, tone: 'gold' | 'danger' | 'cyan') => {
+    if (dramaBannerTimerRef.current) clearTimeout(dramaBannerTimerRef.current);
+    const id = ++fxUid;
+    setDramaBanner({ id, tone, text });
+    dramaBannerTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) {
+        setDramaBanner((cur) => (cur?.id === id ? null : cur));
+      }
+    }, 2600);
+  }, []);
 
   const [cashTransfers, setCashTransfers] = useState<ActiveCashTransfer[]>([]);
   const [transferStage, setTransferStage] = useState<{
@@ -724,8 +920,38 @@ export function GameBoardView({
   const lastChargeTickRef = useRef<number>(0);
   const lastRollPowerRef = useRef<number>(0.58);
 
-  const { stageW, stageH, scale, rotated, toLocalRect } = useLandscapeStage();
+  const { stageW, stageH, scale, rotated, isCompactDevice, toLocalRect } = useLandscapeStage();
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Chế độ Mượt: tự bật sẵn trên Điện thoại/Tablet nhỏ để chống lag 60fps, PC mặc định tắt (có thể bật/tắt bất cứ lúc nào)
+  const [smoothMode, setSmoothMode] = useState<boolean>(() => {
+    try {
+      const saved = window.localStorage.getItem('bgvn_cotyphu_smooth_mode');
+      if (saved === '1') return true;
+      if (saved === '0') return false;
+    } catch {
+      // Ignore storage errors
+    }
+    return isCompactDevice || (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
+  });
+  const smoothModeRef = useRef(smoothMode);
+  smoothModeRef.current = smoothMode;
+
+  const toggleSmoothMode = useCallback(() => {
+    setSmoothMode((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem('bgvn_cotyphu_smooth_mode', next ? '1' : '0');
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    sceneRef.current?.setLowPowerMode(smoothMode);
+  }, [smoothMode]);
 
   const [tileRects, setTileRects] = useState<Record<number, { x: number; y: number; w: number; h: number }>>({});
   const tileRectsRef = useRef<Record<number, { x: number; y: number; w: number; h: number }>>({});
@@ -765,12 +991,52 @@ export function GameBoardView({
     }
   }, []);
 
-  const registerTileRef = useCallback(
-    (index: number) => (el: HTMLButtonElement | null) => {
-      tileElRefs.current[index] = el;
-    },
+  // 52 hàm ref ổn định giúp BoardTileCell (React.memo) không re-render khi quân cờ nhảy 60fps
+  const tileRefCallbacks = useMemo(
+    () =>
+      Array.from({ length: 52 }, (_, index) => (el: HTMLButtonElement | null) => {
+        tileElRefs.current[index] = el;
+      }),
     [],
   );
+
+  const handleSelectTile = useCallback((idx: number) => {
+    setInspectTileIdx(idx);
+  }, []);
+
+  // Cảnh báo "Còn thiếu đúng 1 ô là THẮNG NGAY" (Hàng ô đất hoặc 3/4 Bến Xe)
+  const matchPointWarnings = useMemo(
+    () =>
+      displayState.phase === 'GAME_OVER'
+        ? []
+        : getMatchPointWarnings(displayState.tiles, displayState.players),
+    [displayState.phase, displayState.tiles, displayState.players],
+  );
+
+  const matchPointByTile = useMemo(() => {
+    const map = new Map<number, MatchPointWarning>();
+    for (const w of matchPointWarnings) {
+      if (!map.has(w.targetTileIndex)) {
+        map.set(w.targetTileIndex, w);
+      }
+    }
+    return map;
+  }, [matchPointWarnings]);
+
+  const seenMatchPointKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const currentKeys = new Set(matchPointWarnings.map((w) => `${w.playerId}:${w.targetTileIndex}`));
+    let hasNewThreat = false;
+    for (const k of currentKeys) {
+      if (!seenMatchPointKeysRef.current.has(k)) {
+        hasNewThreat = true;
+      }
+    }
+    seenMatchPointKeysRef.current = currentKeys;
+    if (hasNewThreat && displayState.phase !== 'GAME_OVER') {
+      gameAudio.playMatchPointWarning();
+    }
+  }, [matchPointWarnings, displayState.phase]);
 
   const measureTileRects = useCallback(() => {
     const next: Record<number, { x: number; y: number; w: number; h: number }> = {};
@@ -802,20 +1068,36 @@ export function GameBoardView({
     const container = diceCanvasRef.current;
     if (!container) return;
 
-    const controller = new MonopolySceneController(container, latestStateRef.current);
+    const controller = new MonopolySceneController(
+      container,
+      latestStateRef.current,
+      smoothModeRef.current,
+    );
     sceneRef.current = controller;
 
     return () => {
       mountedRef.current = false;
       cancelAnimationFrame(chargeRafRef.current);
+      if (dramaBannerTimerRef.current) clearTimeout(dramaBannerTimerRef.current);
       controller.dispose();
       sceneRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    saveOfflineGame(displayState);
-  }, [displayState]);
+    if (!onlineContext) {
+      saveOfflineGame(displayState);
+    }
+  }, [displayState, onlineContext]);
+
+  // Đồng hồ 1 giây cập nhật đếm ngược 2 phút chờ kết nối lại trong ván Online
+  useEffect(() => {
+    if (!onlineContext) return;
+    const hasDisconnected = onlineContext.snapshot.humans.some((h) => !h.connected && !h.botTakeover);
+    if (!hasDisconnected) return;
+    const id = setInterval(() => setNowClock(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [onlineContext]);
 
   // Phát âm thanh đặc trưng riêng của từng nhân vật khi chuyển sang lượt người mới
   useEffect(() => {
@@ -849,6 +1131,7 @@ export function GameBoardView({
   }, []);
 
   const spawnTrailSpark = useCallback((x: number, y: number, color: string) => {
+    if (smoothModeRef.current) return;
     const id = ++fxUid;
     setTrailSparks((prev) => [...prev.slice(-14), { id, x, y, color }]);
     setTimeout(() => {
@@ -1052,7 +1335,8 @@ export function GameBoardView({
         .trim()
         .slice(0, 22);
 
-      const items: CashParticleSeed[] = Array.from({ length: 4 }, (_, i) => ({
+      const coinCount = smoothModeRef.current ? 2 : 4;
+      const items: CashParticleSeed[] = Array.from({ length: coinCount }, (_, i) => ({
         delay: i * 0.08,
         isCoin: true,
         spreadX: (i % 2 === 0 ? -1 : 1) * (12 + i * 5),
@@ -1377,14 +1661,39 @@ export function GameBoardView({
 
   // Thực thi hành động game + chuỗi hoạt ảnh & âm thanh nối tiếp
   const dispatchAction = useCallback(
-    async (action: GameAction, rollPower = 0.58) => {
-      if (isAnimating) return;
+    async (
+      action: GameAction,
+      rollPower = 0.58,
+      remoteOverride?: { resultingState: GameState },
+    ) => {
+      if (isAnimatingRef.current) return;
+      isAnimatingRef.current = true;
       setBotThought(null);
       setIsAnimating(true);
 
       const prevState = latestStateRef.current;
-      const { state: nextState, events } = reduceGameAction(prevState, action);
+      const online = onlineContextRef.current;
+
+      // Trong chế độ Online, người khởi phát nước đi tự quay số xúc xắc trước để phát y hệt cho mọi máy
+      let resolvedAction: GameAction = action;
+      if (online && !remoteOverride) {
+        if (
+          (action.type === 'ROLL_DICE' || action.type === 'ROLL_FOR_JAIL') &&
+          !action.diceValues
+        ) {
+          const diceValues = Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6));
+          resolvedAction = { ...action, diceValues };
+        }
+      }
+
+      const { state: reducedState, events } = reduceGameAction(prevState, resolvedAction);
+      const nextState = remoteOverride ? remoteOverride.resultingState : reducedState;
       latestStateRef.current = nextState;
+
+      // Phát tán ngay nước đi lên phòng Online để mọi người cùng xem hoạt ảnh đồng bộ
+      if (online && !remoteOverride) {
+        online.onCommitLocalAction(resolvedAction, rollPower, nextState);
+      }
 
       const prevPositions = new Map<string, number>(prevState.players.map((p) => [p.id, p.position]));
       const liveCashMap = new Map<string, number>(prevState.players.map((p) => [p.id, p.cash]));
@@ -1437,6 +1746,21 @@ export function GameBoardView({
               setLiveDice({ values: ev.values, isDouble: ev.isDouble });
               if (ev.isDouble) {
                 triggerBoardShake();
+                const rollerBefore = prevState.players[prevState.currentPlayerIndex];
+                const rollerAfter = nextState.players[prevState.currentPlayerIndex];
+                if (
+                  nextState.diceCount === 2 &&
+                  rollerBefore &&
+                  !rollerBefore.inJail &&
+                  rollerAfter &&
+                  !rollerAfter.inJail &&
+                  rollerAfter.consecutiveDoubles === 2
+                ) {
+                  showDramaBanner(
+                    `⚠️ ${rollerAfter.name.toUpperCase()} ĐÃ ĐỔ ĐÔI 2/3 — THÊM 1 LẦN ĐỔ ĐÔI NỮA SẼ VÔ TÙ!`,
+                    'danger',
+                  );
+                }
               }
               // Hiển thị rõ số điểm quay được (~0.85s) trước khi nhân vật bắt đầu nhảy di chuyển
               await new Promise((r) => setTimeout(r, 850));
@@ -1569,6 +1893,21 @@ export function GameBoardView({
             await animateCardDrawFromDeck(ev.card.deck);
             break;
 
+          case 'DECK_RESHUFFLED':
+            showDramaBanner(
+              `🔄 BỘ BÀI ${ev.deck === 'CHANCE' ? 'CƠ HỘI' : 'KHÍ VẬN'} ĐÃ XÁO MỚI NGẪU NHIÊN LẠI ĐỦ ${ev.count} LÁ!`,
+              'cyan',
+            );
+            break;
+
+          case 'MONOPOLY_COMPLETED':
+            gameAudio.playDoubleSparkle();
+            showDramaBanner(
+              `✨ ${ev.playerName.toUpperCase()} ĐỦ BỘ ${ev.groupName.toUpperCase()} · TIỀN THUÊ NHÂN ĐÔI (×2)!`,
+              'gold',
+            );
+            break;
+
           case 'HOUSE_BUILT': {
             gameAudio.playBuildOrBuy(ev.level);
             // Cập nhật ngay màu đất & ngôi nhà mới mọc ngay sau khi tiền vừa bay vào Ngân hàng
@@ -1625,12 +1964,24 @@ export function GameBoardView({
         sceneRef.current?.setImmediateDice(nextState.lastDiceValues);
         setLiveDice(null);
         setDisplayState(nextState);
+        isAnimatingRef.current = false;
         setIsAnimating(false);
         measureTileRects();
+
+        // Xử lý tiếp nước đi Online đang xếp hàng (nếu có)
+        const queued = remoteQueueRef.current.shift();
+        if (queued) {
+          setTimeout(() => {
+            if (mountedRef.current) {
+              void dispatchAction(queued.action, queued.rollPower, {
+                resultingState: queued.resultingState,
+              });
+            }
+          }, 40);
+        }
       }
     },
     [
-      isAnimating,
       animateDomPawnPath,
       animateDomAirportFlight,
       animateDomJailLock,
@@ -1643,12 +1994,39 @@ export function GameBoardView({
       spawnShockwave,
       spawnTrailSpark,
       measureTileRects,
+      showDramaBanner,
     ],
   );
 
-  // Điều khiển lượt Bot SmartAI: dừng suy nghĩ 1.6–2.6s khi cân nhắc mua/xây/đấu giá
+  // Đăng ký nhận nước đi đồng bộ từ các người chơi khác trong phòng Online
+  useEffect(() => {
+    if (!onlineContext) return;
+    return onlineContext.registerRemoteActionHandler((ev) => {
+      if (isAnimatingRef.current) {
+        remoteQueueRef.current.push(ev);
+      } else {
+        void dispatchAction(ev.action, ev.rollPower, { resultingState: ev.resultingState });
+      }
+    });
+  }, [onlineContext, dispatchAction]);
+
+  // Xác định máy hiện tại có đảm nhận điều khiển Bot (và ghế người chơi rớt mạng > 2 phút) trong phòng Online hay không
+  const isOnlineBotCoordinator = (() => {
+    if (!onlineContext) return true;
+    const hostMember = onlineContext.snapshot.humans.find((h) => h.isHost);
+    if (hostMember?.connected) {
+      return onlineContext.isHost;
+    }
+    const firstConnected = onlineContext.snapshot.humans.find((h) => h.connected);
+    return firstConnected?.seatId === onlineContext.localPlayerId;
+  })();
+
+  // Điều khiển lượt Bot SmartAI (và tự đánh thay người chơi Online rớt mạng quá 2 phút)
   useEffect(() => {
     if (isAnimating || displayState.phase === 'GAME_OVER' || displayState.phase === 'CARD_REVEAL') {
+      return;
+    }
+    if (onlineContext && !isOnlineBotCoordinator) {
       return;
     }
 
@@ -1659,7 +2037,11 @@ export function GameBoardView({
       actor = displayState.players[displayState.currentPlayerIndex];
     }
 
-    if (!actor || !actor.isBot || actor.isBankrupt) return;
+    if (!actor || actor.isBankrupt) return;
+
+    const onlineHuman = onlineContext?.snapshot.humans.find((h) => h.seatId === actor?.id);
+    const shouldBotAct = actor.isBot || Boolean(onlineHuman?.botTakeover);
+    if (!shouldBotAct) return;
 
     const isTradeDecision =
       displayState.phase === 'BUY_OR_SKIP_DECISION' ||
@@ -1737,7 +2119,7 @@ export function GameBoardView({
       if (commitTimer) clearTimeout(commitTimer);
       setFlashingTileIdx(null);
     };
-  }, [displayState, isAnimating, dispatchAction]);
+  }, [displayState, isAnimating, dispatchAction, onlineContext, isOnlineBotCoordinator]);
 
   const currentPlayer = displayState.players[displayState.currentPlayerIndex] ?? displayState.players[0];
 
@@ -1746,7 +2128,22 @@ export function GameBoardView({
       ? displayState.players.find((p) => p.id === displayState.debtQueue[0].debtorId) ?? currentPlayer
       : currentPlayer;
 
-  const isHumanActing = !activeDebtor.isBot && !isAnimating;
+  const activeOnlineHuman = onlineContext?.snapshot.humans.find((h) => h.seatId === activeDebtor.id);
+  const isWaitingReconnect = Boolean(
+    onlineContext && activeOnlineHuman && !activeOnlineHuman.connected && !activeOnlineHuman.botTakeover,
+  );
+  const activeReconnectSecLeft =
+    isWaitingReconnect && activeOnlineHuman?.disconnectedAt
+      ? Math.max(0, Math.ceil((ONLINE_DISCONNECT_GRACE_MS - (nowClock - activeOnlineHuman.disconnectedAt)) / 1000))
+      : 0;
+  const isEffectiveBot = activeDebtor.isBot || Boolean(activeOnlineHuman?.botTakeover);
+
+  const isHumanActing = onlineContext
+    ? !isEffectiveBot &&
+      !isWaitingReconnect &&
+      !isAnimating &&
+      activeDebtor.id === onlineContext.localPlayerId
+    : !activeDebtor.isBot && !isAnimating;
   const canHumanTapRoll =
     isHumanActing &&
     (displayState.phase === 'WAIT_ROLL' || displayState.phase === 'IN_JAIL_DECISION');
@@ -1768,14 +2165,14 @@ export function GameBoardView({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== 'Space' || e.repeat) return;
-      if (inspectTileIdx !== null || showRules || showDrawer) return;
+      if (inspectTileIdx !== null || showRules) return;
       if (!canHumanTapRoll) return;
       e.preventDefault();
       triggerRollWithPower(0.62);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [canHumanTapRoll, inspectTileIdx, showRules, showDrawer, triggerRollWithPower]);
+  }, [canHumanTapRoll, inspectTileIdx, showRules, triggerRollWithPower]);
 
   // Cơ chế Hybrid Chạm nhanh tung ngay + Nhấn giữ nạp lực lắc xúc xắc trên toàn sân giữa
   const cancelCharging = useCallback(() => {
@@ -1889,6 +2286,7 @@ export function GameBoardView({
 
   return (
     <div
+      data-smooth-mode={smoothMode ? 'true' : 'false'}
       className={`relative h-full w-full overflow-hidden p-1.5 select-none text-white ${
         isBoardShaking ? 'animate-board-shake' : ''
       }`}
@@ -1913,8 +2311,9 @@ export function GameBoardView({
             players={displayState.players}
             isFlashing={flashingTileIdx === tile.index}
             isNewlyBuilt={newlyBuiltTileIdx === tile.index}
-            onSelect={(idx) => setInspectTileIdx(idx)}
-            registerTileRef={registerTileRef(tile.index)}
+            matchPointWarning={matchPointByTile.get(tile.index)}
+            onSelect={handleSelectTile}
+            registerTileRef={tileRefCallbacks[tile.index]}
           />
         ))}
 
@@ -1950,7 +2349,7 @@ export function GameBoardView({
             }`}
           />
 
-          {/* HÀNG TRÊN SÂN GIỮA: 5 nút tiện ích (Trái) + Huy hiệu ván chơi (Giữa) + Bảng Tỷ Phú gọn góc phải trên */}
+          {/* HÀNG TRÊN SÂN GIỮA: 4 nút tiện ích + Mượt (Trái) + Huy hiệu ván chơi (Giữa) + Bảng Tỷ Phú gọn góc phải trên */}
           <div className="relative z-20 flex shrink-0 items-start justify-between gap-2">
             <div data-no-roll="true" className="flex items-center gap-1.5">
               <button
@@ -1972,16 +2371,9 @@ export function GameBoardView({
               </button>
               <button
                 type="button"
-                onClick={() => setShowDrawer(true)}
-                title="Nhật ký & Tiến độ 3 Điều kiện Thắng"
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
-              >
-                <History className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
+                data-testid="rules-book-button"
                 onClick={() => setShowRules(true)}
-                title="Luật chơi 52 ô"
+                title="Bộ Luật Chơi 52 Ô"
                 className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
               >
                 <BookOpen className="h-4 w-4" />
@@ -1994,17 +2386,72 @@ export function GameBoardView({
               >
                 {isFullscreen ? <Minimize2 className="h-4 w-4 text-emerald-300" /> : <Maximize2 className="h-4 w-4" />}
               </button>
+              <button
+                type="button"
+                data-testid="smooth-mode-toggle"
+                onClick={toggleSmoothMode}
+                title={
+                  smoothMode
+                    ? 'Đang bật Chế độ Mượt (tối ưu điện thoại / giảm lag) — bấm để chuyển về Đồ họa Cao'
+                    : 'Bật Chế độ Mượt (giảm lag trên điện thoại & tiết kiệm pin)'
+                }
+                className={`flex h-8 items-center gap-1 rounded-full border px-2.5 text-[10px] font-black shadow-md backdrop-blur-xs transition cursor-pointer ${
+                  smoothMode
+                    ? 'border-emerald-300/80 bg-emerald-600/85 text-white hover:bg-emerald-500'
+                    : 'border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 hover:bg-slate-900'
+                }`}
+              >
+                <Zap className={`h-3.5 w-3.5 ${smoothMode ? 'fill-yellow-200 text-yellow-200' : ''}`} />
+                <span className="hidden sm:inline">{smoothMode ? 'Mượt' : 'Đồ họa'}</span>
+              </button>
             </div>
 
-            {/* Huy hiệu tên game & số lượt */}
-            <div
-              ref={mobileBankAnchorRef}
-              className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[#EAB308]/65 bg-gradient-to-b from-slate-900/85 to-slate-950/90 px-3.5 py-1 text-[11px] font-black tracking-wide text-amber-200 shadow-lg backdrop-blur-xs"
-            >
-              <span>CỜ TỶ PHÚ VIỆT NAM</span>
-              <span className="rounded-full border border-amber-300/35 bg-amber-400/20 px-2 py-0.5 text-[10px] text-amber-200">
-                Lượt {displayState.turnCount}
-              </span>
+            {/* Huy hiệu tên game, mã phòng Online (nếu có), số lượt + Dải cảnh báo sắp thắng */}
+            <div className="flex flex-col items-center gap-1">
+              <div
+                ref={mobileBankAnchorRef}
+                className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[#EAB308]/65 bg-gradient-to-b from-slate-900/85 to-slate-950/90 px-3.5 py-1 text-[11px] font-black tracking-wide text-amber-200 shadow-lg backdrop-blur-xs"
+              >
+                <span>CỜ TỶ PHÚ VIỆT NAM</span>
+                {onlineContext && (
+                  <span className="rounded-full border border-cyan-300/45 bg-cyan-500/20 px-2 py-0.5 font-mono text-[10px] text-cyan-200">
+                    #{onlineContext.roomCode}
+                  </span>
+                )}
+                <span className="rounded-full border border-amber-300/35 bg-amber-400/20 px-2 py-0.5 text-[10px] text-amber-200">
+                  Lượt {displayState.turnCount}
+                </span>
+              </div>
+
+              {matchPointWarnings.length > 0 && (
+                <div
+                  data-testid="matchpoint-warning-banner"
+                  className="inline-flex max-w-[390px] items-center gap-1.5 rounded-full border border-rose-300/85 bg-rose-950/92 px-3 py-0.5 text-[10.5px] font-black tracking-wide text-yellow-200 shadow-[0_0_16px_rgba(244,63,94,0.65)]"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                  <span className="truncate">
+                    CẢNH BÁO: <strong className="text-white">{matchPointWarnings[0].playerName}</strong> còn thiếu{' '}
+                    <strong className="text-amber-300">{matchPointWarnings[0].targetTileName}</strong> (
+                    {matchPointWarnings[0].progressText}) là THẮNG NGAY!
+                  </span>
+                </div>
+              )}
+
+              {dramaBanner && (
+                <div
+                  key={dramaBanner.id}
+                  data-testid="drama-event-banner"
+                  className={`animate-dice-score-pop inline-flex max-w-[430px] items-center gap-1.5 rounded-full border px-3.5 py-0.5 text-[10.5px] font-black tracking-wide shadow-lg ${
+                    dramaBanner.tone === 'gold'
+                      ? 'border-amber-300 bg-gradient-to-r from-amber-950/95 via-yellow-900/95 to-amber-950/95 text-amber-200 shadow-[0_0_18px_rgba(251,191,36,0.45)]'
+                      : dramaBanner.tone === 'danger'
+                        ? 'border-rose-300/90 bg-rose-950/95 text-rose-100 shadow-[0_0_16px_rgba(244,63,94,0.45)]'
+                        : 'border-cyan-300/80 bg-cyan-950/92 text-cyan-100'
+                  }`}
+                >
+                  <span className="truncate">{dramaBanner.text}</span>
+                </div>
+              )}
             </div>
 
             {/* GÓC TRÊN PHẢI: BẢNG TỶ PHÚ 2 CỘT SIÊU GỌN VIỀN ĐỒNG (LUÔN HIỂN THỊ CHUẨN TRÊN CẢ PC & ĐIỆN THOẠI NGANG) */}
@@ -2031,6 +2478,19 @@ export function GameBoardView({
                     0,
                   );
                   const flashState = rowFlash[p.id];
+                  const onlineMember = onlineContext?.snapshot.humans.find((h) => h.seatId === p.id);
+                  const isMeOnline = Boolean(onlineContext && onlineContext.localPlayerId === p.id);
+                  const disconnectedSec =
+                    onlineMember && !onlineMember.connected && !onlineMember.botTakeover && onlineMember.disconnectedAt
+                      ? Math.max(
+                          0,
+                          Math.ceil((ONLINE_DISCONNECT_GRACE_MS - (nowClock - onlineMember.disconnectedAt)) / 1000),
+                        )
+                      : null;
+                  const mmStr =
+                    disconnectedSec !== null
+                      ? `${String(Math.floor(disconnectedSec / 60)).padStart(2, '0')}:${String(disconnectedSec % 60).padStart(2, '0')}`
+                      : null;
 
                   return (
                     <div
@@ -2062,7 +2522,7 @@ export function GameBoardView({
                       >
                         <img src={pChar.avatarUrl} alt={p.name} className="h-full w-full object-cover" />
                         <span className="absolute -bottom-0.5 -right-0.5 rounded-tl bg-slate-950/85 p-[0.5px]">
-                          {p.isBot ? (
+                          {p.isBot || onlineMember?.botTakeover ? (
                             <Bot className="h-2 w-2 text-amber-300" />
                           ) : (
                             <User className="h-2 w-2 text-emerald-300" />
@@ -2074,6 +2534,7 @@ export function GameBoardView({
                           <span className="truncate text-[9px] font-extrabold text-white">
                             {isTurn ? '▶ ' : ''}
                             {p.name}
+                            {isMeOnline ? ' ★' : ''}
                           </span>
                           <span className="shrink-0 text-[9.5px] font-black text-amber-300">
                             <AnimatedCashValue value={p.cash} />
@@ -2082,6 +2543,16 @@ export function GameBoardView({
                         <div className="flex items-center gap-1 text-[8px] text-sky-200/85">
                           <span>{landCount} đất</span>
                           {houseCount > 0 && <span className="text-amber-200">· {houseCount} nhà</span>}
+                          {mmStr && (
+                            <span className="rounded bg-rose-500/35 px-1 font-black text-rose-200">
+                              ⏳{mmStr}
+                            </span>
+                          )}
+                          {onlineMember?.botTakeover && (
+                            <span className="rounded bg-amber-500/35 px-1 font-black text-amber-200">
+                              🤖Thay
+                            </span>
+                          )}
                           {p.inJail && (
                             <span className="inline-flex items-center text-rose-300" title="Đang ở tù">
                               <Lock className="h-2 w-2" />
@@ -2120,7 +2591,7 @@ export function GameBoardView({
               </div>
               <div className="relative flex items-center justify-center">
                 <div
-                  className="pointer-events-none absolute h-28 w-28 rounded-full blur-2xl opacity-55"
+                  className="smooth-hide-blur pointer-events-none absolute h-28 w-28 rounded-full blur-2xl opacity-55"
                   style={{ backgroundColor: leftStagePlayer.landHex }}
                 />
                 <img
@@ -2379,9 +2850,13 @@ export function GameBoardView({
                 <span>
                   {botThought
                     ? botThought.text
-                    : isAnimating
-                      ? 'Đang diễn hoạt nước đi...'
-                      : `Lượt của ${currentPlayer.name}`}
+                    : isWaitingReconnect
+                      ? `⏳ ${activeDebtor.name} đang mất mạng — chờ kết nối lại (${String(Math.floor(activeReconnectSecLeft / 60)).padStart(2, '0')}:${String(activeReconnectSecLeft % 60).padStart(2, '0')}) trước khi Máy đánh thay...`
+                      : isAnimating
+                        ? 'Đang diễn hoạt nước đi...'
+                        : onlineContext && activeDebtor.id !== onlineContext.localPlayerId
+                          ? `🌐 Đang chờ ${activeDebtor.name} thực hiện lượt...`
+                          : `Lượt của ${currentPlayer.name}`}
                 </span>
               </div>
             )}
@@ -2715,8 +3190,13 @@ export function GameBoardView({
               const multiShiftX = count <= 1 ? 0 : (slotIdx - (count - 1) / 2) * 14;
               x = rect.x + sideDir * rect.w * 0.25 + multiShiftX;
               y = rect.y + rect.h * 0.04;
+            } else if (tile?.kind === 'GO') {
+              // Ô Khởi Hành START (Bản A): dàn hàng ngang so le nhẹ ngay vùng giữa-dưới để lộ rõ chữ START phía trên & nhãn KHỞI HÀNH phía dưới
+              const stepX = count <= 1 ? 0 : Math.min(24, (rect.w - 34) / Math.max(1, count - 1));
+              x = rect.x + (slotIdx - (count - 1) / 2) * stepX;
+              y = rect.y + rect.h * 0.14 + (count > 1 ? (slotIdx % 2 === 0 ? -4 : 4) : 0);
             } else {
-              // Ô ĐỨNG (Cạnh Dưới / Trên) & 4 Ô Góc: hạ nhẹ xuống phần dưới ô để lộ rõ tên địa danh phía trên
+              // Ô ĐỨNG (Cạnh Dưới / Trên) & 3 Ô Góc còn lại: hạ nhẹ xuống phần dưới ô để lộ rõ tên địa danh phía trên
               const innerNudgeY = tile?.edge === null ? rect.h * 0.1 : rect.h * 0.2;
               const spread = count <= 1 ? 0 : count === 2 ? 11 : 13;
               const angle = (slotIdx / Math.max(1, count)) * Math.PI * 2 + 0.35;
@@ -2893,81 +3373,6 @@ export function GameBoardView({
         trails={trailSparks}
       />
 
-      {/* Ngăn kéo Nhật ký & Tiến độ 3 Điều kiện Thắng */}
-      {showDrawer && (
-        <div
-          className="absolute inset-0 z-40 flex justify-start bg-black/55 backdrop-blur-xs"
-          onClick={() => setShowDrawer(false)}
-        >
-          <div
-            className="flex h-full w-full max-w-sm flex-col gap-4 border-r border-[#C89B54]/45 bg-stone-900/95 p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-2 text-base font-black text-amber-300">
-                <Crown className="h-4 w-4" />
-                TIẾN ĐỘ 3 THẮNG & NHẬT KÝ
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowDrawer(false)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-2 rounded-2xl border border-[#C89B54]/30 bg-black/35 p-3 text-xs">
-              <div className="font-bold text-amber-200">Tiến độ Thắng 1 Đường Thẳng (trọn 1 cạnh):</div>
-              {([0, 1, 2, 3] as const).map((edge) => {
-                const { ownerCounts, ownableTotal } = evaluateEdgeProgress(displayState.tiles, edge);
-                let topName = 'Chưa ai dẫn';
-                let topCount = 0;
-                let topHex = '#94A3B8';
-                for (const [pid, cnt] of Object.entries(ownerCounts)) {
-                  if (cnt > topCount) {
-                    const p = displayState.players.find((x) => x.id === pid);
-                    if (p && !p.isBankrupt) {
-                      topCount = cnt;
-                      topName = p.name;
-                      topHex = p.landHex;
-                    }
-                  }
-                }
-                return (
-                  <div key={edge} className="flex items-center justify-between">
-                    <span>Cạnh {edge + 1} ({edge % 2 === 0 ? 'dài' : 'ngắn'}):</span>
-                    <span className="font-bold" style={{ color: topHex }}>
-                      {topName} ({topCount}/{ownableTotal})
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex-1 space-y-1.5 overflow-y-auto pr-1 text-xs">
-              {displayState.logs.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={`rounded-xl border px-3 py-2 ${
-                    entry.tone === 'good'
-                      ? 'border-emerald-400/25 bg-emerald-950/35 text-emerald-100'
-                      : entry.tone === 'danger'
-                        ? 'border-rose-400/30 bg-rose-950/35 text-rose-100'
-                        : entry.tone === 'warn'
-                          ? 'border-amber-400/30 bg-amber-950/35 text-amber-100'
-                          : 'border-white/10 bg-white/5 text-stone-200'
-                  }`}
-                >
-                  <span className="mr-1.5 font-bold opacity-60">L{entry.turn}</span>
-                  {entry.text}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Bảng Thông Tin Ô Đất 2 Cột (bấm vào bất kỳ ô nào trên 4 cạnh đều mở) */}
       {inspectTileIdx !== null && displayState.tiles[inspectTileIdx] && (
         <TileInspectorModal
@@ -2981,23 +3386,34 @@ export function GameBoardView({
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
 
       {/* Modal Thẻ Cơ Hội / Khí Vận (32 tranh minh họa + tự đóng 7 giây) */}
-      {displayState.phase === 'CARD_REVEAL' && displayState.activeCard && !isAnimating && (
-        <CardRevealModal
-          prompt={displayState.activeCard}
-          drawer={
-            displayState.players.find((p) => p.id === displayState.activeCard?.drawerId) ??
-            currentPlayer
-          }
-          onConfirm={() => void dispatchAction({ type: 'CONFIRM_CARD' })}
-        />
-      )}
+      {displayState.phase === 'CARD_REVEAL' && displayState.activeCard && !isAnimating && (() => {
+        const cardDrawer =
+          displayState.players.find((p) => p.id === displayState.activeCard?.drawerId) ?? currentPlayer;
+        const drawerOnline = onlineContext?.snapshot.humans.find((h) => h.seatId === cardDrawer.id);
+        const drawerIsBotLike = cardDrawer.isBot || Boolean(drawerOnline?.botTakeover);
+        const canConfirmCard = !onlineContext
+          ? true
+          : drawerIsBotLike
+            ? isOnlineBotCoordinator
+            : cardDrawer.id === onlineContext.localPlayerId;
+
+        return (
+          <CardRevealModal
+            prompt={displayState.activeCard}
+            drawer={cardDrawer}
+            canConfirm={canConfirmCard}
+            onConfirm={() => void dispatchAction({ type: 'CONFIRM_CARD' })}
+          />
+        );
+      })()}
 
       {/* Modal Vinh Danh Chiến Thắng */}
       {displayState.phase === 'GAME_OVER' && !isAnimating && (
         <VictoryModal
           state={displayState}
+          isOnline={Boolean(onlineContext)}
           onRestart={onRestartSameSetup}
-          onBackToLobby={onBackToLobby}
+          onBackToLobby={onlineContext ? onlineContext.onDissolveRoom : onBackToLobby}
         />
       )}
     </div>

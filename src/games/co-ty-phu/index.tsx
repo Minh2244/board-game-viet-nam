@@ -1,70 +1,455 @@
-import { useState } from 'react';
-import { ArrowLeft, Bot, Check, Dices, History, Map, Palette, Play, User, Users } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Bot,
+  Check,
+  Dices,
+  History,
+  Map,
+  Palette,
+  Play,
+  User,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { HUB_BG_WARM_WOOD_URL } from '@/hub/themes';
-import { soundEngine } from '@/shared/audio/soundEngine';
+import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
 import type { GameComponentProps } from '@/shared/types/gameEntry';
 import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from './data/characters';
 import { createInitialGameState } from './engine/reducer';
-import type { CharacterId, GameState, LandColorId, PlayerSlotDraft } from './engine/types';
+import type {
+  CharacterId,
+  GameAction,
+  GameState,
+  LandColorId,
+  PlayerSlotDraft,
+} from './engine/types';
+import { ModeSelectView } from './lobby/ModeSelectView';
 import { clearOfflineGame, loadOfflineGame } from './lobby/offlineSave';
-import { GameBoardView } from './ui/GameBoardView';
+import { OnlineLobbyView } from './lobby/OnlineLobbyView';
+import {
+  clearPersistedOnlineSession,
+  generateRoomCode6Digits,
+  getOrCreatePlayerToken,
+  loadPersistedOnlineSession,
+  OnlineRoomClient,
+  type OnlineRoomSnapshot,
+  type OnlineTransportStatus,
+  type PersistedOnlineSession,
+  type RemoteGameActionEvent,
+} from './network/onlineRoomClient';
+import { GameBoardView, type OnlineGameContext } from './ui/GameBoardView';
 
-const INITIAL_SLOTS: PlayerSlotDraft[] = [
-  { slotIndex: 0, name: 'Bạn 1', isBot: false, characterId: 'ca_phe', landColor: 'red' },
-  { slotIndex: 1, name: 'Máy 1', isBot: true, characterId: 'ao_dai_tim', landColor: 'blue' },
-  { slotIndex: 2, name: 'Máy 2', isBot: true, characterId: 'non_la', landColor: 'emerald' },
-  { slotIndex: 3, name: 'Máy 3', isBot: true, characterId: 'phuot_thu', landColor: 'amber' },
-];
+type LobbyScreenMode = 'mode-select' | 'local-setup' | 'online-lobby';
 
-function nextUniqueSlotName(isBot: boolean, existingSlots: readonly PlayerSlotDraft[], excludeIdx?: number): string {
-  const prefix = isBot ? 'Máy' : 'Bạn';
-  const used = new Set(
-    existingSlots
-      .filter((_, idx) => idx !== excludeIdx)
-      .map((s) => s.name.trim()),
-  );
-  let num = 1;
-  while (used.has(`${prefix} ${num}`)) {
-    num += 1;
+function buildBalancedSlots(
+  humanCount: number,
+  botCount: number,
+  prevSlots: readonly PlayerSlotDraft[] = [],
+): PlayerSlotDraft[] {
+  const safeHumans = Math.max(1, Math.min(6, humanCount));
+  let safeBots = Math.max(0, Math.min(4, botCount));
+  if (safeHumans + safeBots > 6) {
+    safeBots = Math.max(0, 6 - safeHumans);
   }
-  return `${prefix} ${num}`;
+  if (safeHumans + safeBots < 2) {
+    safeBots = 1;
+  }
+
+  const prevHumans = prevSlots.filter((s) => !s.isBot);
+  const prevBots = prevSlots.filter((s) => s.isBot);
+
+  const result: PlayerSlotDraft[] = [];
+  const usedChars = new Set<CharacterId>();
+  const usedColors = new Set<LandColorId>();
+
+  const pickChar = (preferred?: CharacterId, fallbackIdx = 0): CharacterId => {
+    if (preferred) {
+      usedChars.add(preferred);
+      return preferred;
+    }
+    const free = CO_TY_PHU_CHARACTERS.find((c) => !usedChars.has(c.id));
+    const chosen = (free ?? CO_TY_PHU_CHARACTERS[fallbackIdx % CO_TY_PHU_CHARACTERS.length]).id;
+    usedChars.add(chosen);
+    return chosen;
+  };
+
+  const pickColor = (preferred?: LandColorId, fallbackIdx = 0): LandColorId => {
+    if (preferred && !usedColors.has(preferred)) {
+      usedColors.add(preferred);
+      return preferred;
+    }
+    const free = LAND_COLORS.find((c) => !usedColors.has(c.id));
+    const chosen = (free ?? LAND_COLORS[fallbackIdx % LAND_COLORS.length]).id;
+    usedColors.add(chosen);
+    return chosen;
+  };
+
+  for (let i = 0; i < safeHumans; i += 1) {
+    const existing = prevHumans[i];
+    result.push({
+      slotIndex: i,
+      name: existing?.name.trim() || `Bạn ${i + 1}`,
+      isBot: false,
+      characterId: pickChar(existing?.characterId, i),
+      landColor: pickColor(existing?.landColor, i),
+    });
+  }
+
+  for (let j = 0; j < safeBots; j += 1) {
+    const existing = prevBots[j];
+    const idx = safeHumans + j;
+    result.push({
+      slotIndex: idx,
+      name: existing?.name.trim() || `Máy ${j + 1}`,
+      isBot: true,
+      characterId: pickChar(existing?.characterId, idx),
+      landColor: pickColor(existing?.landColor, idx),
+    });
+  }
+
+  return result;
 }
 
+const INITIAL_SLOTS: PlayerSlotDraft[] = buildBalancedSlots(1, 3);
+
 export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
+  const [screen, setScreen] = useState<LobbyScreenMode>('mode-select');
   const [slots, setSlots] = useState<PlayerSlotDraft[]>(INITIAL_SLOTS);
   const [diceMode, setDiceMode] = useState<1 | 2>(2);
   const [mapMode, setMapMode] = useState<'default' | 'random'>('default');
   const [activeSlotIdx, setActiveSlotIdx] = useState(0);
-  const [activeMatch, setActiveMatch] = useState<{ state: GameState; key: number } | null>(null);
+
+  const [activeMatch, setActiveMatch] = useState<{
+    state: GameState;
+    key: number;
+    isOnline: boolean;
+  } | null>(null);
   const [savedMatch, setSavedMatch] = useState<GameState | null>(() => loadOfflineGame());
 
-  const startFreshMatch = () => {
+  // Trạng thái Phòng Online (WebRTC PeerJS + STUN/TURN + BroadcastChannel)
+  const [myToken] = useState<string>(() => getOrCreatePlayerToken());
+  const [resumableOnlineSession, setResumableOnlineSession] =
+    useState<PersistedOnlineSession | null>(() => loadPersistedOnlineSession());
+  const [onlineSnapshot, setOnlineSnapshot] = useState<OnlineRoomSnapshot | null>(null);
+  const [onlineStatus, setOnlineStatus] = useState<OnlineTransportStatus>('CONNECTING');
+  const [onlineStatusMsg, setOnlineStatusMsg] = useState('');
+  const [onlineLoading, setOnlineLoading] = useState(false);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
+
+  const onlineClientRef = useRef<OnlineRoomClient | null>(null);
+  const remoteActionHandlerRef = useRef<((ev: RemoteGameActionEvent) => void) | null>(null);
+
+  const { muted, toggleMute } = useAudioStore();
+
+  // Giữ nhạc nền lễ hội 124 BPM phát vui tươi xuyên suốt màn Chọn Chế Độ & Phòng Chờ; tắt khi bước vào ván cờ
+  useEffect(() => {
+    const inLobby = !activeMatch;
+    soundEngine.setHubActive(inLobby);
+    if (inLobby && !muted) {
+      soundEngine.startHubBgm();
+    }
+
+    const unlock = () => {
+      if (!activeMatch && !useAudioStore.getState().muted) {
+        soundEngine.setHubActive(true);
+        soundEngine.startHubBgm();
+      }
+    };
+    window.addEventListener('pointerdown', unlock, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+    };
+  }, [activeMatch, muted]);
+
+  // Dọn kết nối Online khi thoát hẳn khỏi game Cờ Tỷ Phú
+  useEffect(() => {
+    return () => {
+      onlineClientRef.current?.destroy();
+      onlineClientRef.current = null;
+      soundEngine.setHubActive(false);
+    };
+  }, []);
+
+  const cleanupOnlineClient = useCallback((dissolveReason?: string) => {
+    const client = onlineClientRef.current;
+    if (client) {
+      if (dissolveReason) {
+        client.dissolveOrLeave(dissolveReason);
+      } else {
+        client.destroy();
+      }
+      onlineClientRef.current = null;
+    }
+    setOnlineSnapshot(null);
+    setOnlineLoading(false);
+    setResumableOnlineSession(loadPersistedOnlineSession());
+  }, []);
+
+  const createOnlineClient = useCallback(
+    (roomCode: string, playerName: string, isHost: boolean) => {
+      onlineClientRef.current?.destroy();
+      const client = new OnlineRoomClient({
+        roomCode,
+        playerToken: myToken,
+        playerName,
+        isHost,
+        callbacks: {
+          onSnapshot: (snap) => {
+            setOnlineSnapshot(snap);
+            // Tự động mở bàn cờ trên máy Khách ngay khi Chủ phòng bấm BẮT ĐẦU (hoặc khi reconnect vào ván đang chơi)
+            if (snap.phase === 'PLAYING' && snap.matchState) {
+              setActiveMatch((prev) => {
+                if (prev?.isOnline) return prev;
+                soundEngine.playEnterGame();
+                return {
+                  state: snap.matchState!,
+                  key: (prev?.key ?? 0) + 1,
+                  isOnline: true,
+                };
+              });
+            }
+          },
+          onStatusChange: (status, message) => {
+            setOnlineStatus(status);
+            setOnlineStatusMsg(message);
+          },
+          onRemoteAction: (ev) => {
+            remoteActionHandlerRef.current?.(ev);
+          },
+          onRoomClosed: (reason) => {
+            onlineClientRef.current = null;
+            setOnlineSnapshot(null);
+            setActiveMatch((prev) => (prev?.isOnline ? null : prev));
+            setScreen('mode-select');
+            setOnlineLoading(false);
+            setOnlineError(reason);
+            setResumableOnlineSession(null);
+          },
+          onPeerJoined: () => {
+            soundEngine.playRoomJoin();
+          },
+        },
+      });
+      onlineClientRef.current = client;
+      return client;
+    },
+    [myToken],
+  );
+
+  const handleCreateOnlineRoom = async (playerName: string) => {
+    setOnlineError(null);
+    setOnlineLoading(true);
+    const code = generateRoomCode6Digits();
+    const client = createOnlineClient(code, playerName, true);
+    try {
+      await client.startAsHost(2); // Mặc định gợi ý 2 Máy (Chủ phòng chỉnh tự do 0..4 ngay trong sảnh)
+      setScreen('online-lobby');
+    } catch (err) {
+      setOnlineError(err instanceof Error ? err.message : 'Không thể khởi tạo phòng Online.');
+    } finally {
+      setOnlineLoading(false);
+    }
+  };
+
+  const handleJoinOnlineRoom = async (roomCode: string, playerName: string) => {
+    setOnlineError(null);
+    setOnlineLoading(true);
+    const client = createOnlineClient(roomCode, playerName, false);
+    try {
+      await client.joinRoom();
+      setScreen('online-lobby');
+    } catch (err) {
+      client.destroy();
+      onlineClientRef.current = null;
+      setOnlineSnapshot(null);
+      setOnlineError(err instanceof Error ? err.message : 'Không tìm thấy phòng Online.');
+    } finally {
+      setOnlineLoading(false);
+    }
+  };
+
+  const handleReconnectOnlineSession = async () => {
+    if (!resumableOnlineSession) return;
+    setOnlineError(null);
+    setOnlineLoading(true);
+    const { roomCode, playerName, isHost } = resumableOnlineSession;
+    const client = createOnlineClient(roomCode, playerName, isHost);
+    try {
+      if (isHost) {
+        await client.startAsHost(0);
+        setScreen('online-lobby');
+      } else {
+        await client.joinRoom();
+        setScreen('online-lobby');
+      }
+    } catch (err) {
+      client.destroy();
+      onlineClientRef.current = null;
+      clearPersistedOnlineSession();
+      setResumableOnlineSession(null);
+      setOnlineError(
+        err instanceof Error ? err.message : 'Phòng cũ đã đóng hoặc quá hạn 2 phút.',
+      );
+    } finally {
+      setOnlineLoading(false);
+    }
+  };
+
+  const handleStartOnlineMatch = () => {
+    const client = onlineClientRef.current;
+    if (!client) return;
+    const initial = client.startMatch();
+    if (!initial) return;
+    setActiveMatch((prev) => ({
+      state: initial,
+      key: (prev?.key ?? 0) + 1,
+      isOnline: true,
+    }));
+  };
+
+  const handleDissolveOnlineRoom = useCallback(() => {
+    cleanupOnlineClient('Ván Online đã kết thúc — Phòng được giải tán.');
+    setActiveMatch(null);
+    setScreen('mode-select');
+    setOnlineError(null);
+  }, [cleanupOnlineClient]);
+
+  const registerRemoteActionHandler = useCallback(
+    (fn: (ev: RemoteGameActionEvent) => void) => {
+      remoteActionHandlerRef.current = fn;
+      return () => {
+        if (remoteActionHandlerRef.current === fn) {
+          remoteActionHandlerRef.current = null;
+        }
+      };
+    },
+    [],
+  );
+
+  const handleCommitLocalOnlineAction = useCallback(
+    (action: GameAction, rollPower: number, nextState: GameState) => {
+      onlineClientRef.current?.broadcastCommittedAction(action, rollPower, nextState);
+    },
+    [],
+  );
+
+  const startFreshOfflineMatch = () => {
     soundEngine.playEnterGame();
     clearOfflineGame();
     const fresh = createInitialGameState({ slots, diceCount: diceMode, mapMode });
     setSavedMatch(null);
-    setActiveMatch((prev) => ({ state: fresh, key: (prev?.key ?? 0) + 1 }));
+    setActiveMatch((prev) => ({ state: fresh, key: (prev?.key ?? 0) + 1, isOnline: false }));
   };
 
-  const resumeSavedMatch = () => {
+  const resumeSavedOfflineMatch = () => {
     if (!savedMatch) return;
     soundEngine.playEnterGame();
-    setActiveMatch((prev) => ({ state: savedMatch, key: (prev?.key ?? 0) + 1 }));
+    setActiveMatch((prev) => ({ state: savedMatch, key: (prev?.key ?? 0) + 1, isOnline: false }));
   };
 
+  // 1. ĐANG TRONG VÁN CỜ (OFFLINE HOẶC ONLINE)
   if (activeMatch) {
+    let onlineContext: OnlineGameContext | undefined;
+    if (activeMatch.isOnline && onlineSnapshot && onlineClientRef.current) {
+      const meMember = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
+      onlineContext = {
+        roomCode: onlineSnapshot.roomCode,
+        localPlayerId: meMember?.seatId ?? null,
+        isHost: onlineClientRef.current.isHost,
+        snapshot: onlineSnapshot,
+        onCommitLocalAction: handleCommitLocalOnlineAction,
+        registerRemoteActionHandler,
+        onDissolveRoom: handleDissolveOnlineRoom,
+      };
+    }
+
     return (
       <GameBoardView
         key={activeMatch.key}
         initialState={activeMatch.state}
-        onRestartSameSetup={startFreshMatch}
+        onlineContext={onlineContext}
+        onRestartSameSetup={startFreshOfflineMatch}
         onBackToLobby={() => {
-          setActiveMatch(null);
-          setSavedMatch(loadOfflineGame());
+          if (activeMatch.isOnline) {
+            handleDissolveOnlineRoom();
+          } else {
+            setActiveMatch(null);
+            setSavedMatch(loadOfflineGame());
+            setScreen('local-setup');
+          }
         }}
       />
     );
   }
+
+  // 2. MÀN HÌNH CHỌN CHẾ ĐỘ (CHƠI VỚI MÁY & NHIỀU NGƯỜI | CHƠI ONLINE MÃ 6 SỐ)
+  if (screen === 'mode-select') {
+    return (
+      <ModeSelectView
+        savedOfflineMatch={savedMatch}
+        resumableOnlineSession={resumableOnlineSession}
+        onlineLoading={onlineLoading}
+        onlineError={onlineError}
+        defaultPlayerName={slots[0]?.name || 'Bạn 1'}
+        onBackToHub={() => {
+          cleanupOnlineClient();
+          onExitToHub();
+        }}
+        onOpenLocalSetup={(preset) => {
+          setSlots((prev) =>
+            preset === 'pass-and-play'
+              ? buildBalancedSlots(2, 2, prev)
+              : buildBalancedSlots(1, 3, prev),
+          );
+          setActiveSlotIdx(0);
+          setScreen('local-setup');
+        }}
+        onResumeOfflineMatch={resumeSavedOfflineMatch}
+        onCreateOnlineRoom={(name) => void handleCreateOnlineRoom(name)}
+        onJoinOnlineRoom={(code, name) => void handleJoinOnlineRoom(code, name)}
+        onReconnectOnlineSession={() => void handleReconnectOnlineSession()}
+      />
+    );
+  }
+
+  // 3. SẢNH PHÒNG CHỜ ONLINE (MÃ 6 CHỮ SỐ · GHẾ NGƯỜI + 0–4 MÁY)
+  if (screen === 'online-lobby' && onlineSnapshot && onlineClientRef.current) {
+    return (
+      <OnlineLobbyView
+        snapshot={onlineSnapshot}
+        myToken={myToken}
+        isHost={onlineClientRef.current.isHost}
+        transportStatus={onlineStatus}
+        statusMessage={onlineStatusMsg}
+        onLeaveRoom={() => {
+          cleanupOnlineClient(
+            onlineClientRef.current?.isHost
+              ? 'Chủ phòng đã giải tán phòng chờ.'
+              : 'Bạn đã rời phòng.',
+          );
+          setScreen('mode-select');
+        }}
+        onUpdateMember={(targetToken, patch) => {
+          onlineClientRef.current?.updateMember(targetToken, patch);
+        }}
+        onSetBotCount={(cnt) => {
+          onlineClientRef.current?.setBotCount(cnt);
+        }}
+        onUpdateSettings={(patch) => {
+          onlineClientRef.current?.updateMatchSettings(patch);
+        }}
+        onKickMember={(targetToken) => {
+          onlineClientRef.current?.kickMember(targetToken);
+        }}
+        onStartMatch={handleStartOnlineMatch}
+      />
+    );
+  }
+
+  // 4. SẢNH THIẾT LẬP CHƠI VỚI MÁY & 1 THIẾT BỊ NHIỀU NGƯỜI (BỘ CHỌN TÁCH RIÊNG: NGƯỜI 1–6 & MÁY 0–4)
+  const humanCount = slots.filter((s) => !s.isBot).length;
+  const botCount = slots.filter((s) => s.isBot).length;
 
   const selectedSlot = slots[activeSlotIdx] ?? slots[0];
   const selectedChar =
@@ -73,61 +458,38 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
   const selectedLandColor =
     LAND_COLORS.find((c) => c.id === selectedSlot.landColor) ?? LAND_COLORS[0];
 
-  const handleSetCount = (count: number) => {
+  const handleSetHumanCount = (nextHumans: number) => {
     soundEngine.playPushClick();
     setSlots((prev) => {
-      if (count < prev.length) {
-        if (activeSlotIdx >= count) setActiveSlotIdx(count - 1);
-        return prev.slice(0, count);
-      }
-      const next = [...prev];
-      const usedChars = new Set(next.map((s) => s.characterId));
-      const usedColors = new Set(next.map((s) => s.landColor));
-      while (next.length < count) {
-        const idx = next.length;
-        const char =
-          CO_TY_PHU_CHARACTERS.find((c) => !usedChars.has(c.id)) ??
-          CO_TY_PHU_CHARACTERS[idx % CO_TY_PHU_CHARACTERS.length];
-        const color =
-          LAND_COLORS.find((c) => !usedColors.has(c.id)) ??
-          LAND_COLORS[idx % LAND_COLORS.length];
-        usedChars.add(char.id);
-        usedColors.add(color.id);
-        next.push({
-          slotIndex: idx,
-          name: nextUniqueSlotName(true, next),
-          isBot: true,
-          characterId: char.id,
-          landColor: color.id,
-        });
-      }
-      return next;
+      const curBots = prev.filter((s) => s.isBot).length;
+      const balanced = buildBalancedSlots(nextHumans, curBots, prev);
+      if (activeSlotIdx >= balanced.length) setActiveSlotIdx(balanced.length - 1);
+      return balanced;
     });
   };
 
-  const toggleSlotBot = (idx: number) => {
+  const handleSetBotCount = (nextBots: number) => {
     soundEngine.playPushClick();
-    setSlots((prev) =>
-      prev.map((s, i) => {
-        if (i !== idx) return s;
-        const nextIsBot = !s.isBot;
-        const isDefaultName = /^(Bạn|Máy)\s+\d+$/.test(s.name.trim());
-        return {
-          ...s,
-          isBot: nextIsBot,
-          name: isDefaultName ? nextUniqueSlotName(nextIsBot, prev, i) : s.name,
-        };
-      }),
-    );
+    setSlots((prev) => {
+      const curHumans = prev.filter((s) => !s.isBot).length;
+      // Nếu tổng vượt quá 6 -> tự giảm Số Người cho khớp tổng <= 6; nếu tổng < 2 -> tăng Số Người lên 2
+      let adjustedHumans = curHumans;
+      if (adjustedHumans + nextBots > 6) {
+        adjustedHumans = Math.max(1, 6 - nextBots);
+      }
+      if (adjustedHumans + nextBots < 2) {
+        adjustedHumans = 2;
+      }
+      const balanced = buildBalancedSlots(adjustedHumans, nextBots, prev);
+      if (activeSlotIdx >= balanced.length) setActiveSlotIdx(balanced.length - 1);
+      return balanced;
+    });
   };
 
   const updateActiveSlotName = (name: string) => {
-    setSlots((prev) =>
-      prev.map((s, i) => (i === activeSlotIdx ? { ...s, name } : s)),
-    );
+    setSlots((prev) => prev.map((s, i) => (i === activeSlotIdx ? { ...s, name } : s)));
   };
 
-  // Cho phép các tụ chọn trùng nhân vật thoải mái
   const pickCharacterForActive = (charId: CharacterId) => {
     soundEngine.playPushClick();
     setSlots((prev) =>
@@ -135,7 +497,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     );
   };
 
-  // Màu đất giữ duy nhất cho mỗi tụ: nếu màu đang do tụ khác cầm thì tự đổi chéo mượt
   const pickLandColorForActive = (colorId: LandColorId) => {
     soundEngine.playPushClick();
     setSlots((prev) => {
@@ -150,8 +511,18 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     });
   };
 
+  const handleToggleAudio = () => {
+    const wasMuted = muted;
+    toggleMute();
+    if (wasMuted) {
+      soundEngine.setHubActive(true);
+      soundEngine.startHubBgm();
+      soundEngine.playPushClick();
+    }
+  };
+
   return (
-    <div className="relative h-full w-full overflow-x-hidden overflow-y-auto text-white">
+    <div className="relative h-full w-full overflow-x-hidden overflow-y-auto text-white select-none">
       <img
         src={HUB_BG_WARM_WOOD_URL}
         alt=""
@@ -164,13 +535,13 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
       />
 
       <div className="relative z-10 flex min-h-full w-full flex-row items-start justify-between gap-4 px-5 py-4">
-        {/* Nút Quay lại sảnh sát góc trên bên trái */}
-        <header className="shrink-0">
+        {/* Nút Quay lại chọn chế độ & nút Loa sát góc trên bên trái */}
+        <header className="flex shrink-0 flex-col gap-2">
           <button
             type="button"
             onClick={() => {
               soundEngine.playPushClick();
-              onExitToHub();
+              setScreen('mode-select');
             }}
             className="uiverse-push-btn uiverse-dome-shine inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-black text-white cursor-pointer"
             style={{
@@ -179,39 +550,87 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
             }}
           >
             <ArrowLeft className="h-4 w-4 stroke-[3]" />
-            Quay lại sảnh
+            Chọn chế độ
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToggleAudio}
+            title={muted ? 'Bật nhạc nền sảnh' : 'Tắt âm thanh'}
+            className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/25 bg-slate-900/75 px-3 py-1.5 text-xs font-bold text-amber-200 hover:bg-slate-800 cursor-pointer"
+          >
+            {muted ? <VolumeX className="h-3.5 w-3.5 text-rose-300" /> : <Volume2 className="h-3.5 w-3.5" />}
+            {muted ? 'Đang tắt nhạc' : 'Nhạc sảnh bật'}
           </button>
         </header>
 
-        {/* Thiết lập ván chơi Cờ Tỷ Phú: bố cục ngang 2 cột gọn đẹp trên cả PC lẫn Điện thoại */}
+        {/* Thiết lập ván chơi Offline (Gom chung Chơi Với Máy & 1 Thiết Bị Nhiều Người) */}
         <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-12 gap-5">
-          {/* Cột trái: 2–6 tụ (Người / Máy) + Cài đặt ván */}
-          <section className="col-span-7 flex flex-col gap-3.5 rounded-[26px] border border-emerald-400/40 bg-stone-900/80 p-5 shadow-2xl backdrop-blur-md">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
-              <div>
-                <h1 className="text-[26px] font-black tracking-wide text-emerald-300">
-                  CỜ TỶ PHÚ VIỆT NAM 3D
-                </h1>
-                <p className="mt-0.5 text-[13px] text-stone-300">
-                  Chọn 2–6 tụ (gạt tự do Người / Máy), nhân vật và màu đất sở hữu
-                </p>
+          {/* Cột trái: Bộ chọn Số Người (1–6) + Số Máy (0–4) + Danh sách tụ + Cài đặt */}
+          <section className="col-span-7 flex flex-col gap-3 rounded-[26px] border border-emerald-400/40 bg-stone-900/80 p-5 shadow-2xl backdrop-blur-md">
+            <div className="border-b border-white/10 pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h1 className="text-[22px] font-black tracking-wide text-emerald-300">
+                    CHƠI VỚI MÁY &amp; NHIỀU NGƯỜI
+                  </h1>
+                  <p className="text-xs text-stone-300">
+                    Đang chọn <strong className="text-emerald-300">{humanCount} Người</strong> +{' '}
+                    <strong className="text-amber-300">{botCount} Máy</strong> ={' '}
+                    <strong className="text-white">{slots.length} tụ</strong> (tối đa 6 tụ · tối đa 4 Máy)
+                  </p>
+                </div>
               </div>
-              <div className="flex items-center gap-1 rounded-full bg-black/40 p-1">
-                <Users className="ml-2 h-4 w-4 text-emerald-300" />
-                {[2, 3, 4, 5, 6].map((cnt) => (
-                  <button
-                    key={cnt}
-                    type="button"
-                    onClick={() => handleSetCount(cnt)}
-                    className={`h-8 w-8 rounded-full text-sm font-black transition cursor-pointer ${
-                      slots.length === cnt
-                        ? 'bg-emerald-500 text-white shadow'
-                        : 'text-stone-300 hover:bg-white/10'
-                    }`}
-                  >
-                    {cnt}
-                  </button>
-                ))}
+
+              {/* 2 BỘ NÚT TÁCH RIÊNG: SỐ NGƯỜI (1–6) & SỐ MÁY (0–4) */}
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
+                <div className="flex items-center justify-between gap-1.5 rounded-2xl border border-emerald-400/30 bg-black/40 px-3 py-1.5">
+                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-emerald-300">
+                    <User className="h-3.5 w-3.5" />
+                    Người:
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5, 6].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        data-testid={`human-count-${cnt}`}
+                        onClick={() => handleSetHumanCount(cnt)}
+                        className={`h-7 w-7 rounded-full text-xs font-black transition cursor-pointer ${
+                          humanCount === cnt
+                            ? 'bg-emerald-500 text-white shadow'
+                            : 'text-stone-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {cnt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-1.5 rounded-2xl border border-amber-400/30 bg-black/40 px-3 py-1.5">
+                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-amber-300">
+                    <Bot className="h-3.5 w-3.5" />
+                    Máy:
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[0, 1, 2, 3, 4].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        data-testid={`bot-count-${cnt}`}
+                        onClick={() => handleSetBotCount(cnt)}
+                        className={`h-7 w-7 rounded-full text-xs font-black transition cursor-pointer ${
+                          botCount === cnt
+                            ? 'bg-amber-400 text-slate-950 shadow'
+                            : 'text-stone-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {cnt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -226,7 +645,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
                 const isSelected = idx === activeSlotIdx;
                 return (
                   <div
-                    key={slot.slotIndex}
+                    key={`${slot.isBot ? 'bot' : 'hum'}_${idx}`}
                     onClick={() => setActiveSlotIdx(idx)}
                     style={{
                       borderColor: isSelected ? landInfo.hex : undefined,
@@ -238,7 +657,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
                         : 'border-white/15 bg-black/30 hover:border-white/30'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="flex min-w-0 items-center gap-2.5">
                       <div className="relative shrink-0">
                         <img
                           src={charInfo.avatarUrl}
@@ -262,21 +681,16 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleSlotBot(idx);
-                      }}
-                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-extrabold cursor-pointer transition ${
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-extrabold ${
                         slot.isBot
-                          ? 'bg-amber-500/25 text-amber-200 border border-amber-400/50'
-                          : 'bg-emerald-500/30 text-emerald-100 border border-emerald-400/60'
+                          ? 'border border-amber-400/50 bg-amber-500/25 text-amber-200'
+                          : 'border border-emerald-400/60 bg-emerald-500/30 text-emerald-100'
                       }`}
                     >
                       {slot.isBot ? <Bot className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
                       {slot.isBot ? 'Máy' : 'Người'}
-                    </button>
+                    </span>
                   </div>
                 );
               })}
@@ -352,7 +766,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               {savedMatch && (
                 <button
                   type="button"
-                  onClick={resumeSavedMatch}
+                  onClick={resumeSavedOfflineMatch}
                   className="uiverse-push-btn uiverse-dome-shine flex flex-1 items-center justify-center gap-2 rounded-full py-3 text-base font-black text-white cursor-pointer"
                   style={{
                     background: 'linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%)',
@@ -365,7 +779,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               )}
               <button
                 type="button"
-                onClick={startFreshMatch}
+                onClick={startFreshOfflineMatch}
                 className="uiverse-push-btn uiverse-dome-shine flex flex-1 items-center justify-center gap-2 rounded-full py-3 text-lg font-black text-white cursor-pointer"
                 style={{
                   background: 'linear-gradient(135deg, #34F5A8 0%, #10B981 52%, #06B6D4 100%)',
@@ -380,7 +794,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
 
           {/* Cột phải: Tùy chỉnh Tên tụ + Màu đất + Nhân vật Chibi */}
           <section className="col-span-5 flex flex-col justify-between gap-2.5 rounded-[26px] border border-amber-300/35 bg-stone-900/80 p-5 shadow-2xl backdrop-blur-md">
-            {/* Tên nhân vật & Giới thiệu */}
             <div className="w-full text-center">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-amber-200">
                 <span
@@ -393,7 +806,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               <p className="text-xs text-stone-300 sm:text-[13px]">{selectedChar.tagline}</p>
             </div>
 
-            {/* Nhân vật Chibi vừa tầm mắt */}
             <div className="relative my-0.5 flex h-40 w-full items-end justify-center sm:h-44">
               <div
                 aria-hidden="true"
@@ -407,13 +819,9 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               />
             </div>
 
-            {/* Tên tụ & Chọn Màu Đất */}
             <div className="space-y-2.5 rounded-2xl border border-white/10 bg-black/30 p-3">
               <div className="flex items-center gap-2">
-                <label
-                  htmlFor="slot-name-input"
-                  className="shrink-0 text-xs font-bold text-stone-300"
-                >
+                <label htmlFor="slot-name-input" className="shrink-0 text-xs font-bold text-stone-300">
                   Tên tụ:
                 </label>
                 <input
@@ -452,7 +860,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
                         onClick={() => pickLandColorForActive(c.id)}
                         className={`relative flex h-7 w-full items-center justify-center rounded-lg border-2 transition cursor-pointer hover:scale-105 sm:h-8 ${
                           isCurrent
-                            ? 'border-white scale-105 shadow-[0_0_12px_rgba(255,255,255,0.5)]'
+                            ? 'scale-105 border-white shadow-[0_0_12px_rgba(255,255,255,0.5)]'
                             : 'border-white/25 opacity-85 hover:opacity-100'
                         }`}
                         style={{ backgroundColor: c.hex }}
@@ -468,7 +876,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               </div>
             </div>
 
-            {/* Lưới 8 nhân vật Chibi (có thể chọn trùng nhân vật giữa các tụ) */}
             <div className="grid w-full grid-cols-4 gap-2">
               {CO_TY_PHU_CHARACTERS.map((ch) => {
                 const picked = ch.id === selectedChar.id;
@@ -498,7 +905,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           </section>
         </main>
 
-        {/* Khoảng cân xứng bên phải trên màn hình rộng */}
         <div className="hidden w-[64px] shrink-0 xl:block 2xl:w-[116px]" aria-hidden="true" />
       </div>
     </div>

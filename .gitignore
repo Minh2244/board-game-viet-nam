@@ -1,55 +1,149 @@
-# Dependencies
+# ==============================================================================
+# 1. Dependencies & Package Manager Caches (KHÔNG đẩy thư viện cài đặt lên Git)
+# ==============================================================================
 node_modules/
+jspm_packages/
+bower_components/
+web_modules/
 .pnp/
 .pnp.*
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+.yarnrc
 
-# Build outputs
-dist/
-dist-ssr/
-*.tsbuildinfo
+# Lưu ý: GIỮ LẠI package.json & package-lock.json (chỉ chứa tên gói & URL npm công khai)
+# để Vercel / máy khác cài đặt đúng phiên bản thư viện giống hệt bản build.
 
-# Vercel & Hosting local links
-.vercel/
-
-# Environment & Secrets (NEVER commit)
+# ==============================================================================
+# 2. Secrets, Credentials, Keys & Environment (TUYỆT ĐỐI KHÔNG ĐẨY LÊN GIT)
+# ==============================================================================
 .env
 .env.*
+.env*.local
 !.env.example
+!.env.sample
 *.local
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+secrets/
+credentials.json
+*service-account*.json
+firebase-adminsdk*.json
 .npmrc
+.netrc
+.htpasswd
 
-# Test, coverage & scratch outputs
+# ==============================================================================
+# 3. Build, Bundler & Tool Caches
+# ==============================================================================
+dist/
+dist-ssr/
+build/
+out/
+.output/
+.vite/
+.cache/
+.turbo/
+.parcel-cache/
+.rollup.cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+*.cpuprofile
+*.heapsnapshot
+
+# ==============================================================================
+# 4. Hosting / Cloud / Deploy Local State
+# ==============================================================================
+.vercel/
+.netlify/
+.firebase/
+.firebaserc
+.cloudflare/
+.wrangler/
+
+# ==============================================================================
+# 5. Local Databases & Dumps
+# ==============================================================================
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.sql
+*.dump
+
+# ==============================================================================
+# 6. Testing, Coverage, Automation & Scratch Outputs
+# ==============================================================================
 coverage/
+.nyc_output/
 .vitest/
 playwright-report/
+playwright/.cache/
 test-results/
+blob-report/
+cypress/videos/
+cypress/screenshots/
 tmp/
+temp/
 scratch/
 
-# Logs
+# ==============================================================================
+# 7. Logs & Runtime Files
+# ==============================================================================
 logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
+yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
+*.pid
+*.seed
+*.pid.lock
 
-# Editor & IDE local settings
+# ==============================================================================
+# 8. Editor, IDE & AI Assistant Local Configs
+# ==============================================================================
 .vscode/*
 !.vscode/extensions.json
 .idea/
+*.iml
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
+*.swp
+*.swo
 *.sw?
+*~
+.claude/
+.cursor/
+.gemini/
+.windsurf/
+.antigravity/
 
-# OS generated junk
+# ==============================================================================
+# 9. OS Generated Junk & Backups
+# ==============================================================================
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
 *.tmp
+*.temp
 *.bak
 *.orig

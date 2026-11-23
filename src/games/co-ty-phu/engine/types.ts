@@ -219,6 +219,8 @@ export type GameAnimEvent =
   | { type: 'JAIL_FREE'; playerId: string }
   | { type: 'CASH_CHANGE'; playerId: string; delta: number; label: string; counterpartyId?: string | 'BANK' }
   | { type: 'CARD_DRAWN'; card: CardDef; tileIndex: number }
+  | { type: 'DECK_RESHUFFLED'; deck: CardDeckKind; count: number }
+  | { type: 'MONOPOLY_COMPLETED'; playerId: string; playerName: string; groupName: string; groupHex: string }
   | { type: 'HOUSE_BUILT'; tileIndex: number; level: number; ownerId: string; landHex: string }
   | { type: 'ASSET_SOLD'; tileIndex: number; kind: 'BUILDING' | 'PROPERTY'; playerId: string }
   | { type: 'TILE_CHANGED'; tileIndex: number }

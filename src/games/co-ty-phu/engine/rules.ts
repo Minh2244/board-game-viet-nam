@@ -1,4 +1,4 @@
-import { COLOR_GROUPS, isOwnableTile } from '../data/boardData';
+import { COLOR_GROUPS } from '../data/boardData';
 import type {
   BoardTile,
   EdgeIndex,
@@ -206,19 +206,97 @@ export function computePlayerNetWorth(
   return total;
 }
 
+/** Tiến độ Thắng 1 Hàng Ô Đất: chỉ tính các Ô ĐẤT ĐỊA DANH (PROPERTY) trên cùng 1 cạnh (Trái/Phải: 6 · Trên: 9 · Dưới: 11) */
 export function evaluateEdgeProgress(
   tiles: readonly BoardTile[],
   edge: EdgeIndex,
 ): { ownerCounts: Record<string, number>; ownableTotal: number } {
-  const ownables = tiles.filter((t) => t.edge === edge && isOwnableTile(t));
+  const edgeProperties = tiles.filter((t) => t.edge === edge && t.kind === 'PROPERTY');
   const ownerCounts: Record<string, number> = {};
-  for (const tile of ownables) {
-    const owner = getTileEffectiveOwnerId(tile);
-    if (owner) {
-      ownerCounts[owner] = (ownerCounts[owner] ?? 0) + 1;
+  for (const tile of edgeProperties) {
+    if (tile.ownerId) {
+      ownerCounts[tile.ownerId] = (ownerCounts[tile.ownerId] ?? 0) + 1;
     }
   }
-  return { ownerCounts, ownableTotal: ownables.length };
+  return { ownerCounts, ownableTotal: edgeProperties.length };
+}
+
+export interface MatchPointWarning {
+  playerId: string;
+  playerName: string;
+  playerHex: string;
+  kind: 'LINE_PROPERTY' | 'FOUR_AUCTIONS';
+  targetTileIndex: number;
+  targetTileName: string;
+  edge?: EdgeIndex;
+  progressText: string;
+}
+
+/**
+ * Quét toàn bàn cờ tìm các trường hợp "Còn thiếu đúng 1 ô nữa là THẮNG NGAY":
+ * 1. Một người đang sở hữu (N - 1)/N ô đất địa danh trên 1 cạnh và ô đất còn thiếu hiện chưa có chủ.
+ * 2. Một người đang sở hữu 3/4 Bến Xe Đấu Giá và Bến Xe thứ 4 chưa bị ai chốt sở hữu.
+ */
+export function getMatchPointWarnings(
+  tiles: readonly BoardTile[],
+  players: readonly PlayerState[],
+): MatchPointWarning[] {
+  const warnings: MatchPointWarning[] = [];
+  const alivePlayers = players.filter((p) => !p.isBankrupt);
+  if (alivePlayers.length <= 1) return warnings;
+
+  // 1. Cảnh báo thiếu đúng 1 Ô Đất trên 1 cạnh (LINE_PROPERTY)
+  for (const edge of [0, 1, 2, 3] as const) {
+    const edgeProps = tiles.filter((t) => t.edge === edge && t.kind === 'PROPERTY');
+    if (edgeProps.length < 2) continue;
+
+    const unowned = edgeProps.filter((t) => !t.ownerId);
+    if (unowned.length !== 1) continue;
+
+    const missingTile = unowned[0];
+    const owned = edgeProps.filter((t) => Boolean(t.ownerId));
+    const soleOwnerId = owned[0]?.ownerId;
+    if (!soleOwnerId || !owned.every((t) => t.ownerId === soleOwnerId)) continue;
+
+    const owner = alivePlayers.find((p) => p.id === soleOwnerId);
+    if (!owner) continue;
+
+    warnings.push({
+      playerId: owner.id,
+      playerName: owner.name,
+      playerHex: owner.landHex,
+      kind: 'LINE_PROPERTY',
+      targetTileIndex: missingTile.index,
+      targetTileName: missingTile.name,
+      edge,
+      progressText: `${edgeProps.length - 1}/${edgeProps.length} đất`,
+    });
+  }
+
+  // 2. Cảnh báo thiếu đúng 1 Bến Xe cuối để đủ 4/4 (FOUR_AUCTIONS)
+  const stations = tiles.filter((t) => t.kind === 'AUCTION_STATION');
+  const openStations = stations.filter((s) => s.auctionState?.status !== 'CLOSED');
+  if (stations.length === 4 && openStations.length === 1) {
+    const closedStations = stations.filter((s) => s.auctionState?.status === 'CLOSED');
+    const soleOwnerId = closedStations[0]?.auctionState?.finalOwnerId;
+    if (soleOwnerId && closedStations.every((s) => s.auctionState?.finalOwnerId === soleOwnerId)) {
+      const owner = alivePlayers.find((p) => p.id === soleOwnerId);
+      if (owner) {
+        const missingStation = openStations[0];
+        warnings.push({
+          playerId: owner.id,
+          playerName: owner.name,
+          playerHex: owner.landHex,
+          kind: 'FOUR_AUCTIONS',
+          targetTileIndex: missingStation.index,
+          targetTileName: missingStation.name,
+          progressText: '3/4 Bến Xe',
+        });
+      }
+    }
+  }
+
+  return warnings;
 }
 
 export function checkVictory(
@@ -233,11 +311,11 @@ export function checkVictory(
 
   const aliveSet = new Set(alivePlayers.map((p) => p.id));
 
-  // 1. Thắng 1 Đường Thẳng (9 ô có thể mua trên cùng 1 cạnh)
+  // 1. Thắng 1 Hàng Ô Đất (toàn bộ Ô Đất Địa Danh trên cùng 1 cạnh đều thuộc về 1 người)
   for (const edge of [0, 1, 2, 3] as const) {
     const { ownerCounts, ownableTotal } = evaluateEdgeProgress(tiles, edge);
     for (const [ownerId, count] of Object.entries(ownerCounts)) {
-      if (count >= ownableTotal && aliveSet.has(ownerId)) {
+      if (ownableTotal > 0 && count >= ownableTotal && aliveSet.has(ownerId)) {
         return { winnerId: ownerId, condition: 'LINE_VICTORY', edge };
       }
     }

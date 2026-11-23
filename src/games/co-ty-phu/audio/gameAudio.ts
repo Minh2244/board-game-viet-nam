@@ -399,6 +399,13 @@ export const gameAudio = {
     coinPing(1180, 1.07, 0.06);
   },
 
+  /** Hồi chuông cảnh báo ngắn kịch tính khi có người chỉ còn thiếu 1 ô là thắng ngay */
+  playMatchPointWarning(): void {
+    tone(783.99, 880, 0.14, 0.14, 'triangle', 0, true, 2400);
+    tone(1046.5, 1174.66, 0.18, 0.13, 'sine', 0.16, true);
+    coinPing(1568, 0.18, 0.09);
+  },
+
   /** Kèn & đàn chúc mừng Nhà Vô Địch */
   playVictoryFanfare(): void {
     const notes: [number, number, number][] = [

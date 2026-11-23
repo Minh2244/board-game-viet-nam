@@ -94,7 +94,7 @@ interface ImpactSpark {
 export class DiceActor3D {
   public readonly group = new THREE.Group();
   private readonly bodyGeo: RoundedBoxGeometry;
-  private readonly bodyMat: THREE.MeshPhysicalMaterial;
+  private readonly bodyMat: THREE.Material;
   private readonly pipSmallGeo: THREE.CircleGeometry;
   private readonly pipBigGeo: THREE.CircleGeometry;
   private readonly pipRimSmallGeo: THREE.CircleGeometry;
@@ -119,16 +119,30 @@ export class DiceActor3D {
   private chargeLevel = 0;
   private isRolling = false;
   private idlePhase = 0;
+  private lowPowerMode = false;
 
-  constructor(diceCount: 1 | 2) {
-    this.bodyGeo = new RoundedBoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE, 5, DIE_SIZE * 0.165);
-    this.bodyMat = new THREE.MeshPhysicalMaterial({
-      color: '#FCF7EA',
-      roughness: 0.2,
-      metalness: 0.03,
-      clearcoat: 0.72,
-      clearcoatRoughness: 0.15,
-    });
+  constructor(diceCount: 1 | 2, lowPowerMode = false) {
+    this.lowPowerMode = lowPowerMode;
+    this.bodyGeo = new RoundedBoxGeometry(
+      DIE_SIZE,
+      DIE_SIZE,
+      DIE_SIZE,
+      lowPowerMode ? 2 : 5,
+      DIE_SIZE * 0.165,
+    );
+    this.bodyMat = lowPowerMode
+      ? new THREE.MeshStandardMaterial({
+          color: '#FCF7EA',
+          roughness: 0.28,
+          metalness: 0.04,
+        })
+      : new THREE.MeshPhysicalMaterial({
+          color: '#FCF7EA',
+          roughness: 0.2,
+          metalness: 0.03,
+          clearcoat: 0.72,
+          clearcoatRoughness: 0.15,
+        });
 
     this.pipSmallGeo = new THREE.CircleGeometry(0.088, 20);
     this.pipBigGeo = new THREE.CircleGeometry(0.135, 24);
@@ -250,6 +264,15 @@ export class DiceActor3D {
     }
   }
 
+  public setLowPowerMode(enabled: boolean): void {
+    this.lowPowerMode = enabled;
+  }
+
+  /** Trả về true chỉ khi xúc xắc đang tung, đang giữ nạp lực hoặc còn tia sáng/vòng hào quang (giúp tắt vòng lặp WebGL khi đứng im) */
+  public isActive(): boolean {
+    return this.isRolling || this.isCharging || this.haloProgress >= 0 || this.sparks.length > 0;
+  }
+
   public setCharging(active: boolean, charge01: number): void {
     this.isCharging = active;
     this.chargeLevel = Math.max(0, Math.min(1, charge01));
@@ -336,7 +359,15 @@ export class DiceActor3D {
 
         if (nextBounceIdx < bounceTimes.length && t >= bounceTimes[nextBounceIdx]) {
           gameAudio.playDiceBounce(nextBounceIdx, power);
-          const sparkCount = nextBounceIdx === 0 ? 9 : nextBounceIdx === 1 ? 5 : 3;
+          const sparkCount = this.lowPowerMode
+            ? nextBounceIdx === 0
+              ? 4
+              : 2
+            : nextBounceIdx === 0
+              ? 9
+              : nextBounceIdx === 1
+                ? 5
+                : 3;
           for (const a of anims) {
             this.spawnImpactSparks(a.obj.position, sparkCount, nextBounceIdx === 0 ? '#FEF08A' : '#BAE6FD');
           }

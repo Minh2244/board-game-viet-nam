@@ -33,13 +33,13 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
     expect(upcoming.every((g) => g.loader === undefined)).toBe(true);
   });
 
-  it('Đủ 52 ô bàn cờ chữ nhật 17x11, gồm 20 ô khung cố định (không còn Di Sản) và 32 ô đất chia 11 nhóm màu', () => {
+  it('Đủ 52 ô bàn cờ chữ nhật 17x11, gồm 18 ô khung cố định (3 Cơ Hội / 3 Khí Vận / Thuế -200K dưới) và 34 ô đất chia 12 nhóm màu', () => {
     expect(DEFAULT_BOARD_TILES).toHaveLength(52);
-    expect(FIXED_SKELETON_INDICES.size).toBe(20);
+    expect(FIXED_SKELETON_INDICES.size).toBe(18);
     expect(DEFAULT_BOARD_TILES.some((t) => t.kind === 'HERITAGE')).toBe(false);
 
     const properties = DEFAULT_BOARD_TILES.filter((t) => t.kind === 'PROPERTY');
-    expect(properties).toHaveLength(32);
+    expect(properties).toHaveLength(34);
 
     // Nhà máy Thủy Điện & Bến Xe Đấu Giá tuyệt đối KHÔNG thuộc nhóm màu đất
     const utilities = DEFAULT_BOARD_TILES.filter((t) => t.kind === 'UTILITY');
@@ -49,7 +49,7 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
     expect(stations).toHaveLength(4);
     expect(stations.every((t) => t.colorGroup === undefined)).toBe(true);
 
-    // Kiểm tra 11 nhóm màu (10 nhóm 3 ô + Nhóm 11 Bắc Trung Bộ 2 ô) & 3 quy tắc cân bằng giá
+    // Kiểm tra 12 nhóm màu (10 nhóm 3 ô + Nhóm 11 Bắc Trung Bộ 2 ô + Nhóm 12 Đông Bắc Bộ 2 ô) & quy tắc cân bằng giá
     const groupCounts = new Map<number, number>();
     for (const tile of properties) {
       expect(tile.colorGroup).toBeDefined();
@@ -58,11 +58,12 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
       expect(tile.basePrice! % 200_000).toBe(0);
       groupCounts.set(tile.colorGroup!, (groupCounts.get(tile.colorGroup!) ?? 0) + 1);
     }
-    expect(Object.keys(COLOR_GROUPS)).toHaveLength(11);
+    expect(Object.keys(COLOR_GROUPS)).toHaveLength(12);
     for (let g = 1; g <= 10; g += 1) {
       expect(groupCounts.get(g)).toBe(3);
     }
     expect(groupCounts.get(11)).toBe(2);
+    expect(groupCounts.get(12)).toBe(2);
 
     const expensiveProps = properties.filter((t) => (t.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD);
     expect(expensiveProps.length).toBeLessThanOrEqual(MAX_EXPENSIVE_PROPERTY_COUNT);
@@ -85,12 +86,14 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
     }
   });
 
-  it('Cả 4 cạnh bàn cờ 17x11 phân bố đối xứng (15/9/15/9) với đúng 1 Bến Xe Đấu Giá mỗi cạnh', () => {
+  it('Cả 4 cạnh bàn cờ 17x11 phân bố đối xứng 10-7-10-7 ô đất với đúng 1 Bến Xe Đấu Giá mỗi cạnh', () => {
     const expectedLengths = [15, 9, 15, 9] as const;
-    const expectedOwnables = [13, 7, 11, 7] as const;
+    const expectedProps = [10, 7, 10, 7] as const;
+    const expectedOwnables = [12, 8, 12, 8] as const;
     for (const edge of [0, 1, 2, 3] as const) {
       const edgeTiles = DEFAULT_BOARD_TILES.filter((t) => t.edge === edge);
       expect(edgeTiles).toHaveLength(expectedLengths[edge]);
+      expect(edgeTiles.filter((t) => t.kind === 'PROPERTY')).toHaveLength(expectedProps[edge]);
       const ownable = edgeTiles.filter(isOwnableTile);
       expect(ownable).toHaveLength(expectedOwnables[edge]);
       const stations = edgeTiles.filter((t) => t.kind === 'AUCTION_STATION');
@@ -127,7 +130,7 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
         t.kind === 'AUCTION_STATION' ||
         t.kind === 'UTILITY',
     );
-    expect(picturedTiles).toHaveLength(38);
+    expect(picturedTiles).toHaveLength(40);
     const uniqueArtUrls = new Set<string>();
     for (const tile of picturedTiles) {
       const art = getLandmarkArtworkUrl(tile.name);
@@ -135,15 +138,18 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
       expect(art!.length).toBeGreaterThan(0);
       uniqueArtUrls.add(art!);
     }
-    expect(uniqueArtUrls.size).toBe(38);
+    expect(uniqueArtUrls.size).toBe(40);
 
-    // Góc 26 là Sân Bay Quốc Tế duy nhất; Cơ Hội (1,17,27,43) & Khí Vận (15,25,40,51) cách xa nhau ở 2 đầu cạnh; không còn ô Di Sản
+    // Góc 26 là Sân Bay Quốc Tế duy nhất; đúng 3 Cơ Hội (3,19,29) & 3 Khí Vận (12,40,49) xa góc; Thuế BĐS ở 14 (dưới) & Thuế Du Lịch ở 35 (trên)
     expect(DEFAULT_BOARD_TILES[26].kind).toBe('AIRPORT');
-    expect(DEFAULT_BOARD_TILES[10].kind).toBe('PROPERTY');
-    expect(DEFAULT_BOARD_TILES[11].kind).toBe('PROPERTY');
-    expect(DEFAULT_BOARD_TILES[32].kind).toBe('TAX');
-    expect(DEFAULT_BOARD_TILES[32].fixedTaxAmount).toBe(500_000);
-    expect([1, 17, 27, 43].every((i) => DEFAULT_BOARD_TILES[i].kind === 'CHANCE')).toBe(true);
-    expect([15, 25, 40, 51].every((i) => DEFAULT_BOARD_TILES[i].kind === 'FATE')).toBe(true);
+    expect(DEFAULT_BOARD_TILES[14].kind).toBe('TAX');
+    expect(DEFAULT_BOARD_TILES[14].fixedTaxAmount).toBeUndefined();
+    expect(DEFAULT_BOARD_TILES[35].kind).toBe('TAX');
+    expect(DEFAULT_BOARD_TILES[35].fixedTaxAmount).toBe(500_000);
+    expect(DEFAULT_BOARD_TILES.filter((t) => t.kind === 'CHANCE').map((t) => t.index)).toEqual([3, 19, 29]);
+    expect(DEFAULT_BOARD_TILES.filter((t) => t.kind === 'FATE').map((t) => t.index)).toEqual([12, 40, 49]);
+    // Cạnh trái (17..25) không còn Khí Vận; Cạnh phải (43..51) không còn Cơ Hội
+    expect(DEFAULT_BOARD_TILES.filter((t) => t.edge === 1 && t.kind === 'FATE')).toHaveLength(0);
+    expect(DEFAULT_BOARD_TILES.filter((t) => t.edge === 3 && t.kind === 'CHANCE')).toHaveLength(0);
   });
 });

@@ -1,4 +1,5 @@
 import { cryptoRandomInt, cryptoShuffle } from '@/shared/crypto/random';
+import { COLOR_GROUPS } from '../data/boardData';
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '../data/cards';
 import { LAND_COLORS } from '../data/characters';
 import { generateBoardTiles, pickRandomPropertyDestination } from '../data/mapGenerator';
@@ -148,13 +149,12 @@ function moveForwardSteps(
     path.push((oldPos + i) % 52);
   }
   const newPos = (oldPos + steps) % 52;
-  const landedExactlyOnGo = oldPos > 0 && oldPos + steps === 52;
-  const passedGo =
-    (oldPos === 0 && player.stoppedOnGoForward && steps > 0) ||
-    (oldPos > 0 && oldPos + steps > 52);
+  // Luật chuẩn mới: CHỈ nhận +3 Tr khi đi tiến VƯỢT QUA ô Khởi Hành (oldPos > 0 && oldPos + steps > 52).
+  // Xui dừng đúng ô 0 (oldPos + steps === 52) sẽ KHÔNG nhận tiền vòng đó (lượt sau rời ô 0 cũng không bù).
+  const passedGo = oldPos > 0 && oldPos + steps > 52;
 
   player.position = newPos;
-  player.stoppedOnGoForward = landedExactlyOnGo;
+  player.stoppedOnGoForward = false;
   if (passedGo) {
     player.cash += GO_PASS_REWARD;
     events.push({
@@ -164,7 +164,9 @@ function moveForwardSteps(
       label: `+${formatShortVnd(GO_PASS_REWARD)} Khởi Hành`,
       counterpartyId: 'BANK',
     });
-    addLog(state, `${player.name} đi ngang qua ô Khởi Hành, nhận +${formatShortVnd(GO_PASS_REWARD)}!`, 'good');
+    addLog(state, `${player.name} vượt qua ô Khởi Hành, nhận +${formatShortVnd(GO_PASS_REWARD)}!`, 'good');
+  } else if (oldPos > 0 && oldPos + steps === 52) {
+    addLog(state, `${player.name} dừng trúng ô START (Khởi Hành) — không được nhận thưởng +3 Tr vòng này!`, 'warn');
   }
   events.push({ type: 'PAWN_STEP', playerId: player.id, path, backwards: false, passedGo });
 }
@@ -198,7 +200,7 @@ function moveBackwardSteps(
   addLog(state, `${player.name} lùi ${steps} ô về ${state.tiles[newPos].name} (không nhận thưởng Khởi Hành).`, 'warn');
 }
 
-function refillDeckIfEmpty(state: GameState, kind: CardDeckKind): void {
+function refillDeckIfEmpty(state: GameState, kind: CardDeckKind, events: GameAnimEvent[]): void {
   const heldJailCards = state.players
     .filter((p) => !p.isBankrupt)
     .reduce((sum, p) => sum + p.getOutOfJailCards, 0);
@@ -213,6 +215,7 @@ function refillDeckIfEmpty(state: GameState, kind: CardDeckKind): void {
           : CHANCE_CARDS.filter((c) => c.effect.type !== 'JAIL_FREE_CARD').map((c) => c.id);
     state.chanceDeck = cryptoShuffle(basePool);
     state.chanceDiscard = [];
+    events.push({ type: 'DECK_RESHUFFLED', deck: 'CHANCE', count: state.chanceDeck.length });
     addLog(
       state,
       `🔄 Đã bốc hết bộ Cơ Hội — Xáo trộn ngẫu nhiên lại ${state.chanceDeck.length} lá bài!`,
@@ -230,6 +233,7 @@ function refillDeckIfEmpty(state: GameState, kind: CardDeckKind): void {
         : FATE_CARDS.filter((c) => c.effect.type !== 'JAIL_FREE_CARD').map((c) => c.id);
   state.fateDeck = cryptoShuffle(basePool);
   state.fateDiscard = [];
+  events.push({ type: 'DECK_RESHUFFLED', deck: 'FATE', count: state.fateDeck.length });
   addLog(
     state,
     `🔄 Đã bốc hết bộ Khí Vận — Xáo trộn ngẫu nhiên lại ${state.fateDeck.length} lá bài!`,
@@ -237,8 +241,8 @@ function refillDeckIfEmpty(state: GameState, kind: CardDeckKind): void {
   );
 }
 
-function drawCard(state: GameState, kind: CardDeckKind): CardDef {
-  refillDeckIfEmpty(state, kind);
+function drawCard(state: GameState, kind: CardDeckKind, events: GameAnimEvent[]): CardDef {
+  refillDeckIfEmpty(state, kind, events);
 
   if (kind === 'CHANCE') {
     const cardId = state.chanceDeck.shift()!;
@@ -247,7 +251,7 @@ function drawCard(state: GameState, kind: CardDeckKind): CardDef {
       state.chanceDiscard.push(cardId);
     }
     if (state.chanceDeck.length === 0) {
-      refillDeckIfEmpty(state, 'CHANCE');
+      refillDeckIfEmpty(state, 'CHANCE', events);
     }
     return card;
   }
@@ -258,7 +262,7 @@ function drawCard(state: GameState, kind: CardDeckKind): CardDef {
     state.fateDiscard.push(cardId);
   }
   if (state.fateDeck.length === 0) {
-    refillDeckIfEmpty(state, 'FATE');
+    refillDeckIfEmpty(state, 'FATE', events);
   }
   return card;
 }
@@ -580,7 +584,15 @@ function resolveTileLanding(
         finishStepAndRouteNext(state, events);
         return;
       }
-      enqueueDebt(state, events, player.id, 'BANK', JAIL_VISIT_FEE, 'Phí thăm tù');
+      const hasPrisonerInJail = state.players.some(
+        (p) => !p.isBankrupt && p.inJail && p.id !== player.id,
+      );
+      if (!hasPrisonerInJail) {
+        addLog(state, `${player.name} ghé qua Trại Giam đang trống — hoàn toàn miễn phí!`, 'info');
+        finishStepAndRouteNext(state, events);
+        return;
+      }
+      enqueueDebt(state, events, player.id, 'BANK', JAIL_VISIT_FEE, 'Phí thăm nuôi (có người đang ở tù)');
       return;
     }
 
@@ -606,7 +618,7 @@ function resolveTileLanding(
 
     case 'CHANCE':
     case 'FATE': {
-      const card = drawCard(state, tile.kind);
+      const card = drawCard(state, tile.kind, events);
       state.activeCard = { card, drawerId: player.id, tileIndex };
       state.phase = 'CARD_REVEAL';
       events.push({ type: 'CARD_DRAWN', card, tileIndex });
@@ -627,10 +639,20 @@ function resolveTileLanding(
       tile.currentDestinationTileIndex = pickRandomPropertyDestination(state.tiles, destIndex);
       events.push({ type: 'AIRPORT_FLY', playerId: player.id, fromIndex, toIndex: destIndex });
       events.push({ type: 'TILE_CHANGED', tileIndex: tile.index });
+
+      // Luật mới: Đi máy bay LUÔN được tính là đã bay qua ô Khởi Hành -> nhận ngay +3.000.000 đ!
+      player.cash += GO_PASS_REWARD;
+      events.push({
+        type: 'CASH_CHANGE',
+        playerId: player.id,
+        delta: GO_PASS_REWARD,
+        label: `+${formatShortVnd(GO_PASS_REWARD)} Bay qua Khởi Hành`,
+        counterpartyId: 'BANK',
+      });
       addLog(
         state,
-        `${player.name} cất cánh từ ${tile.name} bay thẳng tới ${state.tiles[destIndex].name}!`,
-        'info',
+        `${player.name} cất cánh từ ${tile.name} tới ${state.tiles[destIndex].name} và nhận +${formatShortVnd(GO_PASS_REWARD)} (bay qua Khởi Hành)!`,
+        'good',
       );
       resolveTileLanding(state, events, player, destIndex);
       return;
@@ -938,6 +960,22 @@ export function reduceGameAction(
         });
         events.push({ type: 'TILE_CHANGED', tileIndex: tile.index });
         addLog(state, `${current.name} mua thành công ${tile.name} giá ${formatShortVnd(price)}!`, 'good');
+
+        // Nếu vừa gom đủ trọn bộ nhóm màu -> phát sự kiện chúc mừng ×2 tiền thuê!
+        if (
+          tile.kind === 'PROPERTY' &&
+          tile.colorGroup !== undefined &&
+          playerOwnsFullColorGroup(state.tiles, current.id, tile.colorGroup)
+        ) {
+          const grp = COLOR_GROUPS[tile.colorGroup];
+          events.push({
+            type: 'MONOPOLY_COMPLETED',
+            playerId: current.id,
+            playerName: current.name,
+            groupName: grp?.name ?? `Nhóm ${tile.colorGroup}`,
+            groupHex: grp?.hex ?? '#F59E0B',
+          });
+        }
       } else {
         addLog(state, `${current.name} bỏ qua không mua ${tile.name}.`, 'info');
       }

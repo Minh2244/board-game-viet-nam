@@ -1,5 +1,4 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
-import { isOwnableTile } from '../data/boardData';
 import {
   AUCTION_START_PRICE,
   calculatePropertyRent,
@@ -64,20 +63,19 @@ function getEdgeThreatsAndOwn(
   edge: number | null,
   botId: string,
 ): { botCount: number; maxEnemyCount: number; totalOwnable: number } {
-  if (edge === null) return { botCount: 0, maxEnemyCount: 0, totalOwnable: 9 };
-  const ownables = tiles.filter((t) => t.edge === edge && isOwnableTile(t));
+  if (edge === null) return { botCount: 0, maxEnemyCount: 0, totalOwnable: 6 };
+  const edgeProps = tiles.filter((t) => t.edge === edge && t.kind === 'PROPERTY');
   let botCount = 0;
   const enemies = new Map<string, number>();
-  for (const t of ownables) {
-    const owner = getTileEffectiveOwnerId(t);
-    if (!owner) continue;
-    if (owner === botId) botCount += 1;
-    else enemies.set(owner, (enemies.get(owner) ?? 0) + 1);
+  for (const t of edgeProps) {
+    if (!t.ownerId) continue;
+    if (t.ownerId === botId) botCount += 1;
+    else enemies.set(t.ownerId, (enemies.get(t.ownerId) ?? 0) + 1);
   }
   return {
     botCount,
     maxEnemyCount: Math.max(0, ...enemies.values()),
-    totalOwnable: ownables.length,
+    totalOwnable: edgeProps.length,
   };
 }
 
@@ -196,7 +194,10 @@ export function computeBotAction(state: GameState): GameAction | null {
 
       const threatAhead = computeMaxThreatAhead(state, bot);
       const edgeInfo = getEdgeThreatsAndOwn(state.tiles, tile.edge, bot.id);
-      const mustBlockEdge = edgeInfo.maxEnemyCount >= 6 || edgeInfo.botCount >= 6;
+      const mustBlockEdge =
+        tile.kind === 'PROPERTY' &&
+        (edgeInfo.maxEnemyCount >= Math.max(3, edgeInfo.totalOwnable - 2) ||
+          edgeInfo.botCount >= Math.max(3, edgeInfo.totalOwnable - 2));
 
       let priorityBonus = false;
       if (tile.kind === 'PROPERTY' && tile.colorGroup) {

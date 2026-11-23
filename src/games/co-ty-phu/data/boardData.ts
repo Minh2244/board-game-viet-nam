@@ -1,6 +1,6 @@
 import type { BoardTileDef, ColorGroupInfo, EdgeIndex } from '../engine/types';
 
-/** 11 nhóm màu đất tông Retro Vivid cổ điển (10 nhóm 3 ô + 1 nhóm 2 ô Bắc Trung Bộ) — KHÔNG gồm Nhà Máy / Bến Xe */
+/** 12 nhóm màu đất tông Retro Vivid cổ điển (10 nhóm 3 ô + 2 nhóm 2 ô: Bắc Trung Bộ & Đông Bắc Bộ) — KHÔNG gồm Nhà Máy / Bến Xe */
 export const COLOR_GROUPS: Record<number, ColorGroupInfo> = {
   1: { id: 1, name: 'Núi Rừng Tây Bắc', tierName: 'Khởi điểm', hex: '#7E4727' },
   2: { id: 2, name: 'Duyên Hải Miền Trung', tierName: 'Khởi điểm', hex: '#1A6E96' },
@@ -13,6 +13,7 @@ export const COLOR_GROUPS: Record<number, ColorGroupInfo> = {
   9: { id: 9, name: 'Kỳ Quan Bắc Bộ', tierName: 'Đất Vàng', hex: '#264E94' },
   10: { id: 10, name: 'Đô Thị Nam Bộ', tierName: 'Đất Vàng', hex: '#5D3694' },
   11: { id: 11, name: 'Bắc Trung Bộ', tierName: 'Khởi điểm', hex: '#0E7490' },
+  12: { id: 12, name: 'Đông Bắc Bộ', tierName: 'Phổ thông', hex: '#6D28D9' },
 };
 
 export const BOARD_COLS = 17;
@@ -24,31 +25,31 @@ export const EXPENSIVE_PROPERTY_THRESHOLD = 5_000_000;
 export const MAX_EXPENSIVE_PROPERTY_COUNT = 6;
 
 /**
- * 20 ô khung đặc biệt cố định vị trí trên lưới chữ nhật chuẩn 17×11 (ĐÃ BỎ HẾT Ô DI SẢN + TIỀN):
- * - 4 góc: 0 (Khởi Hành), 16 (Trại Giam), 26 (Sân Bay Quốc Tế), 42 (Vô Tù)
- * - 4 Bến Xe Đấu Giá đối xứng mỗi cạnh 1 bến (độc lập, không thuộc nhóm màu đất): 5, 21, 31, 47
- * - 2 Nhà Máy Thủy Điện đối diện cạnh dưới/trên (độc lập, không thuộc nhóm màu đất): 6 (Trị An), 33 (Hòa Bình)
- * - 4 Cơ Hội (?) đẩy sát đầu khởi điểm từng cạnh: 1, 17, 27, 43
- * - 4 Khí Vận (!) đẩy sát cuối đối lập từng cạnh (cách xa Cơ Hội 8–14 ô): 15, 25, 40, 51
- * - 2 Thuế: 32 (Thuế Du Lịch -500 Nghìn), 41 (Thuế Bất Động Sản)
+ * 18 ô khung đặc biệt cố định vị trí trên lưới chữ nhật chuẩn 17×11 (ĐỐI XỨNG 34 Ô ĐẤT 10–7–10–7):
+ * - 4 góc: 0 (Khởi Hành / START), 16 (Trại Giam), 26 (Sân Bay Quốc Tế), 42 (Vô Tù)
+ * - 4 Bến Xe Đấu Giá đối xứng mỗi cạnh 1 bến (độc lập, không thuộc nhóm màu đất): 6, 22, 32, 46
+ * - 2 Nhà Máy Thủy Điện đối diện cạnh dưới/trên (độc lập, không thuộc nhóm màu đất): 9 (Trị An), 38 (Hòa Bình)
+ * - 3 Cơ Hội (?) rải thoáng xa góc & xa nhau (bỏ ở cạnh phải): 3, 19, 29
+ * - 3 Khí Vận (!) rải thoáng xa góc & xa nhau (bỏ ở cạnh trái): 12, 40, 49
+ * - 2 Thuế đối xứng 2 cạnh ngang: 14 (Thuế Bất Động Sản -200 Nghìn cạnh dưới), 35 (Thuế Du Lịch -500 Nghìn cạnh trên)
  */
 export const FIXED_SKELETON_INDICES = new Set<number>([
   0, 16, 26, 42,
-  5, 21, 31, 47,
-  6, 33,
-  1, 17, 27, 43,
-  15, 25, 40, 51,
-  32, 41,
+  6, 22, 32, 46,
+  9, 38,
+  3, 19, 29,
+  12, 40, 49,
+  14, 35,
 ]);
 
-/** 11 vị trí ô đất cạnh dưới đầu tiên (luôn giữ giá khởi điểm nhẹ nhàng 1 Tr – 2,2 Tr, 0 ô đắt) */
-export const STARTER_BOTTOM_PROPERTY_INDICES: readonly number[] = [2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14];
+/** 10 vị trí ô đất cạnh dưới đầu tiên (luôn giữ giá khởi điểm nhẹ nhàng 1 Tr – 2,2 Tr, 0 ô đắt) */
+export const STARTER_BOTTOM_PROPERTY_INDICES: readonly number[] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 15];
 
-/** 21 vị trí ô đất trên 3 cạnh còn lại (Trái, Trên, Phải) — luôn bố trí xen kẽ Đắt (5–6 Tr) với Vừa/Rẻ */
+/** 24 vị trí ô đất trên 3 cạnh còn lại (Trái: 7, Trên: 10, Phải: 7) — luôn xen kẽ 2 ô Đắt (5–6 Tr) mỗi cạnh */
 export const INTERLEAVED_EDGE_PROPERTY_SLOTS: Record<1 | 2 | 3, readonly number[]> = {
-  1: [18, 19, 20, 22, 23, 24],
-  2: [28, 29, 30, 34, 35, 36, 37, 38, 39],
-  3: [44, 45, 46, 48, 49, 50],
+  1: [17, 18, 20, 21, 23, 24, 25],
+  2: [27, 28, 30, 31, 33, 34, 36, 37, 39, 41],
+  3: [43, 44, 45, 47, 48, 50, 51],
 };
 
 /** Quy đổi chỉ số ô 0..51 thuận chiều kim đồng hồ trên lưới chữ nhật 17×11 (15 trên/dưới, 9 trái/phải + 4 góc) */
@@ -66,65 +67,65 @@ export function computeGridPos(index: number): { col: number; row: number; edge:
 type RawTileSeed = Omit<BoardTileDef, 'edge' | 'gridPos'>;
 
 const RAW_DEFAULT_TILES: RawTileSeed[] = [
-  // Góc 0 + Cạnh Dưới (15 ô: 1..15 — 11 ô đất khởi điểm 1 Tr – 2,2 Tr, 0 ô đắt, đã thay 2 ô Di Sản bằng Thanh Hóa & Nghệ An)
-  { index: 0, kind: 'GO', name: 'Khởi Hành (Bắt Đầu)' },
-  { index: 1, kind: 'CHANCE', name: 'Cơ Hội 1' },
-  { index: 2, kind: 'PROPERTY', name: 'Mộc Châu', colorGroup: 1, basePrice: 1_000_000 },
-  { index: 3, kind: 'PROPERTY', name: 'Hà Giang', colorGroup: 1, basePrice: 1_200_000 },
+  // Góc 0 + Cạnh Dưới (15 ô: 1..15 — 10 ô đất khởi điểm + Cơ Hội 3 + BX 6 + TĐ 9 + Khí Vận 12 + Thuế -200K 14)
+  { index: 0, kind: 'GO', name: 'Khởi Hành (START)' },
+  { index: 1, kind: 'PROPERTY', name: 'Mộc Châu', colorGroup: 1, basePrice: 1_000_000 },
+  { index: 2, kind: 'PROPERTY', name: 'Hà Giang', colorGroup: 1, basePrice: 1_200_000 },
+  { index: 3, kind: 'CHANCE', name: 'Cơ Hội 1' },
   { index: 4, kind: 'PROPERTY', name: 'Sa Pa', colorGroup: 1, basePrice: 1_400_000 },
-  { index: 5, kind: 'AUCTION_STATION', name: 'Bến Xe Miền Tây' },
-  { index: 6, kind: 'UTILITY', name: 'Thủy Điện Trị An', basePrice: 2_000_000 },
-  { index: 7, kind: 'PROPERTY', name: 'Lý Sơn', colorGroup: 2, basePrice: 1_400_000 },
-  { index: 8, kind: 'PROPERTY', name: 'Vĩnh Hy', colorGroup: 2, basePrice: 1_600_000 },
-  { index: 9, kind: 'PROPERTY', name: 'Phú Yên', colorGroup: 2, basePrice: 1_800_000 },
+  { index: 5, kind: 'PROPERTY', name: 'Lý Sơn', colorGroup: 2, basePrice: 1_400_000 },
+  { index: 6, kind: 'AUCTION_STATION', name: 'Bến Xe Miền Tây' },
+  { index: 7, kind: 'PROPERTY', name: 'Vĩnh Hy', colorGroup: 2, basePrice: 1_600_000 },
+  { index: 8, kind: 'PROPERTY', name: 'Phú Yên', colorGroup: 2, basePrice: 1_800_000 },
+  { index: 9, kind: 'UTILITY', name: 'Thủy Điện Trị An', basePrice: 2_000_000 },
   { index: 10, kind: 'PROPERTY', name: 'Thanh Hóa', colorGroup: 11, basePrice: 1_600_000 },
   { index: 11, kind: 'PROPERTY', name: 'Nghệ An', colorGroup: 11, basePrice: 1_800_000 },
-  { index: 12, kind: 'PROPERTY', name: 'Bắc Ninh', colorGroup: 3, basePrice: 1_800_000 },
-  { index: 13, kind: 'PROPERTY', name: 'Ba Vì', colorGroup: 3, basePrice: 2_000_000 },
-  { index: 14, kind: 'PROPERTY', name: 'Hà Nội', colorGroup: 3, basePrice: 2_200_000 },
-  { index: 15, kind: 'FATE', name: 'Khí Vận 1' },
+  { index: 12, kind: 'FATE', name: 'Khí Vận 1' },
+  { index: 13, kind: 'PROPERTY', name: 'Bắc Ninh', colorGroup: 3, basePrice: 1_800_000 },
+  { index: 14, kind: 'TAX', name: 'Thuế Bất Động Sản' },
+  { index: 15, kind: 'PROPERTY', name: 'Hà Nội', colorGroup: 3, basePrice: 2_200_000 },
 
-  // Góc 16 + Cạnh Trái (9 ô: 17..25 — Xen kẽ 2 ô Đắt: Cát Bà 5 Tr & Đồng Nai 5,6 Tr)
+  // Góc 16 + Cạnh Trái (9 ô: 17..25 — 7 ô đất + Cơ Hội 19 + BX 22 · ĐÃ BỎ KHÍ VẬN · 2 ô Đắt: Cát Bà & Đồng Nai)
   { index: 16, kind: 'VISIT_JAIL', name: 'Trại Giam / Thăm Nuôi' },
-  { index: 17, kind: 'CHANCE', name: 'Cơ Hội 2' },
-  { index: 18, kind: 'PROPERTY', name: 'Kon Tum', colorGroup: 4, basePrice: 2_000_000 },
-  { index: 19, kind: 'PROPERTY', name: 'Cát Bà', colorGroup: 9, basePrice: 5_000_000 },
-  { index: 20, kind: 'PROPERTY', name: 'Quảng Bình', colorGroup: 5, basePrice: 2_600_000 },
-  { index: 21, kind: 'AUCTION_STATION', name: 'Bến Xe Phương Trang' },
-  { index: 22, kind: 'PROPERTY', name: 'Phan Thiết', colorGroup: 6, basePrice: 3_000_000 },
-  { index: 23, kind: 'PROPERTY', name: 'Đồng Nai', colorGroup: 10, basePrice: 5_600_000 },
-  { index: 24, kind: 'PROPERTY', name: 'Mỹ Tho', colorGroup: 8, basePrice: 3_800_000 },
-  { index: 25, kind: 'FATE', name: 'Khí Vận 2' },
+  { index: 17, kind: 'PROPERTY', name: 'Ba Vì', colorGroup: 3, basePrice: 2_000_000 },
+  { index: 18, kind: 'PROPERTY', name: 'Cát Bà', colorGroup: 9, basePrice: 5_000_000 },
+  { index: 19, kind: 'CHANCE', name: 'Cơ Hội 2' },
+  { index: 20, kind: 'PROPERTY', name: 'Kon Tum', colorGroup: 4, basePrice: 2_000_000 },
+  { index: 21, kind: 'PROPERTY', name: 'Quảng Bình', colorGroup: 5, basePrice: 2_600_000 },
+  { index: 22, kind: 'AUCTION_STATION', name: 'Bến Xe Phương Trang' },
+  { index: 23, kind: 'PROPERTY', name: 'Phan Thiết', colorGroup: 6, basePrice: 3_000_000 },
+  { index: 24, kind: 'PROPERTY', name: 'Đồng Nai', colorGroup: 10, basePrice: 5_600_000 },
+  { index: 25, kind: 'PROPERTY', name: 'Cao Bằng', colorGroup: 12, basePrice: 2_200_000 },
 
-  // Góc 26 + Cạnh Trên (15 ô: 27..41 — Xen kẽ 2 ô Đắt: Ninh Bình 5,2 Tr & Bình Dương 5,8 Tr)
+  // Góc 26 + Cạnh Trên (15 ô: 27..41 — 10 ô đất + Cơ Hội 29 + BX 32 + Thuế -500K 35 + TĐ 38 + Khí Vận 40 · 2 ô Đắt: Ninh Bình & Bình Dương)
   { index: 26, kind: 'AIRPORT', name: 'Sân Bay Quốc Tế' },
-  { index: 27, kind: 'CHANCE', name: 'Cơ Hội 3' },
-  { index: 28, kind: 'PROPERTY', name: 'Buôn Ma Thuột', colorGroup: 4, basePrice: 2_200_000 },
-  { index: 29, kind: 'PROPERTY', name: 'Cố Đô Huế', colorGroup: 5, basePrice: 3_000_000 },
+  { index: 27, kind: 'PROPERTY', name: 'Buôn Ma Thuột', colorGroup: 4, basePrice: 2_200_000 },
+  { index: 28, kind: 'PROPERTY', name: 'Cố Đô Huế', colorGroup: 5, basePrice: 3_000_000 },
+  { index: 29, kind: 'CHANCE', name: 'Cơ Hội 3' },
   { index: 30, kind: 'PROPERTY', name: 'Ninh Bình', colorGroup: 9, basePrice: 5_200_000 },
-  { index: 31, kind: 'AUCTION_STATION', name: 'Bến Xe Miền Đông' },
-  { index: 32, kind: 'TAX', name: 'Thuế Du Lịch', fixedTaxAmount: 500_000 },
-  { index: 33, kind: 'UTILITY', name: 'Thủy Điện Hòa Bình', basePrice: 2_000_000 },
-  { index: 34, kind: 'PROPERTY', name: 'Vũng Tàu', colorGroup: 6, basePrice: 3_400_000 },
-  { index: 35, kind: 'PROPERTY', name: 'Quy Nhơn', colorGroup: 7, basePrice: 3_800_000 },
+  { index: 31, kind: 'PROPERTY', name: 'Vũng Tàu', colorGroup: 6, basePrice: 3_400_000 },
+  { index: 32, kind: 'AUCTION_STATION', name: 'Bến Xe Miền Đông' },
+  { index: 33, kind: 'PROPERTY', name: 'Quy Nhơn', colorGroup: 7, basePrice: 3_800_000 },
+  { index: 34, kind: 'PROPERTY', name: 'Đà Lạt', colorGroup: 4, basePrice: 2_600_000 },
+  { index: 35, kind: 'TAX', name: 'Thuế Du Lịch', fixedTaxAmount: 500_000 },
   { index: 36, kind: 'PROPERTY', name: 'Bình Dương', colorGroup: 10, basePrice: 5_800_000 },
-  { index: 37, kind: 'PROPERTY', name: 'Đà Lạt', colorGroup: 4, basePrice: 2_600_000 },
-  { index: 38, kind: 'PROPERTY', name: 'Cần Thơ', colorGroup: 8, basePrice: 4_200_000 },
-  { index: 39, kind: 'PROPERTY', name: 'Nha Trang', colorGroup: 7, basePrice: 4_000_000 },
-  { index: 40, kind: 'FATE', name: 'Khí Vận 3' },
-  { index: 41, kind: 'TAX', name: 'Thuế Bất Động Sản' },
+  { index: 37, kind: 'PROPERTY', name: 'Mỹ Tho', colorGroup: 8, basePrice: 3_800_000 },
+  { index: 38, kind: 'UTILITY', name: 'Thủy Điện Hòa Bình', basePrice: 2_000_000 },
+  { index: 39, kind: 'PROPERTY', name: 'Cần Thơ', colorGroup: 8, basePrice: 4_200_000 },
+  { index: 40, kind: 'FATE', name: 'Khí Vận 2' },
+  { index: 41, kind: 'PROPERTY', name: 'Nha Trang', colorGroup: 7, basePrice: 4_000_000 },
 
-  // Góc 42 + Cạnh Phải (9 ô: 43..51 — Xen kẽ 2 ô Đắt: Vịnh Hạ Long 5,4 Tr & Sài Gòn 6 Tr)
+  // Góc 42 + Cạnh Phải (9 ô: 43..51 — 7 ô đất + BX 46 + Khí Vận 49 · ĐÃ BỎ CƠ HỘI · 2 ô Đắt: Vịnh Hạ Long & Sài Gòn)
   { index: 42, kind: 'GO_TO_JAIL', name: 'Bị Bắt Vào Tù' },
-  { index: 43, kind: 'CHANCE', name: 'Cơ Hội 4' },
-  { index: 44, kind: 'PROPERTY', name: 'Hội An', colorGroup: 5, basePrice: 3_400_000 },
-  { index: 45, kind: 'PROPERTY', name: 'Vịnh Hạ Long', colorGroup: 9, basePrice: 5_400_000 },
-  { index: 46, kind: 'PROPERTY', name: 'Côn Đảo', colorGroup: 6, basePrice: 3_800_000 },
-  { index: 47, kind: 'AUCTION_STATION', name: 'Bến Xe Giáp Bát' },
+  { index: 43, kind: 'PROPERTY', name: 'Hội An', colorGroup: 5, basePrice: 3_400_000 },
+  { index: 44, kind: 'PROPERTY', name: 'Vịnh Hạ Long', colorGroup: 9, basePrice: 5_400_000 },
+  { index: 45, kind: 'PROPERTY', name: 'Côn Đảo', colorGroup: 6, basePrice: 3_800_000 },
+  { index: 46, kind: 'AUCTION_STATION', name: 'Bến Xe Giáp Bát' },
+  { index: 47, kind: 'PROPERTY', name: 'Lạng Sơn', colorGroup: 12, basePrice: 2_600_000 },
   { index: 48, kind: 'PROPERTY', name: 'Đà Nẵng', colorGroup: 7, basePrice: 4_400_000 },
-  { index: 49, kind: 'PROPERTY', name: 'Phú Quốc', colorGroup: 8, basePrice: 4_400_000 },
+  { index: 49, kind: 'FATE', name: 'Khí Vận 3' },
   { index: 50, kind: 'PROPERTY', name: 'Sài Gòn', colorGroup: 10, basePrice: 6_000_000 },
-  { index: 51, kind: 'FATE', name: 'Khí Vận 4' },
+  { index: 51, kind: 'PROPERTY', name: 'Phú Quốc', colorGroup: 8, basePrice: 4_400_000 },
 ];
 
 export const DEFAULT_BOARD_TILES: readonly BoardTileDef[] = RAW_DEFAULT_TILES.map((tile) => {

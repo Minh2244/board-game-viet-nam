@@ -25,10 +25,10 @@ function hasAdjacentExpensiveTiles(byIndex: Map<number, BoardTileDef>): boolean 
 }
 
 /**
- * Tạo bộ 52 ô bàn cờ hoàn chỉnh (giữ nguyên tuyệt đối 22 ô khung đặc biệt trên mọi bản đồ).
+ * Tạo bộ 52 ô bàn cờ hoàn chỉnh (giữ nguyên tuyệt đối 18 ô khung đặc biệt trên mọi bản đồ).
  * Nếu mapMode === 'random':
- * - 9 ô cạnh dưới đầu tiên luôn là 9 ô khởi điểm nhẹ nhàng (1 Tr – 2,2 Tr) được xáo trộn ngẫu nhiên.
- * - 21 ô trên 3 cạnh Trái/Trên/Phải được chia xen kẽ ĐÚNG 2 ô Đắt (5–6 Tr) mỗi cạnh kèm các ô vừa/rẻ,
+ * - 10 ô cạnh dưới luôn là 10 ô khởi điểm nhẹ nhàng (1 Tr – 2,2 Tr) được xáo trộn ngẫu nhiên.
+ * - 24 ô trên 3 cạnh Trái/Trên/Phải (7–10–7) được chia xen kẽ ĐÚNG 2 ô Đắt (5–6 Tr) mỗi cạnh kèm các ô vừa/rẻ,
  *   tuyệt đối không để 2 ô Đắt đứng liền kề nhau!
  */
 export function generateBoardTiles(mapMode: 'default' | 'random'): BoardTile[] {

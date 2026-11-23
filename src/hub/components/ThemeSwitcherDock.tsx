@@ -1,4 +1,4 @@
-import { Volume2, VolumeX } from 'lucide-react';
+import { Music, Volume2, VolumeX } from 'lucide-react';
 import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
 import { HUB_THEMES, type HubThemeId } from '../themes';
 
@@ -10,19 +10,37 @@ interface ThemeSwitcherDockProps {
 const THEME_ORDER: HubThemeId[] = ['wood', 'mint', 'sunset', 'neon'];
 
 export function ThemeSwitcherDock({ activeTheme, onSelectTheme }: ThemeSwitcherDockProps) {
-  const { muted, toggleMute } = useAudioStore();
+  const { muted, bgmPlaying, toggleMute, setMuted } = useAudioStore();
 
   const handleMuteToggle = () => {
     const wasMuted = muted;
     toggleMute();
     if (wasMuted) {
+      soundEngine.setHubActive(true);
       soundEngine.startHubBgm();
       soundEngine.playPushClick();
     }
   };
 
+  const handleStartListen = () => {
+    if (muted) setMuted(false);
+    soundEngine.setHubActive(true);
+    soundEngine.startHubBgm();
+    soundEngine.playPushClick();
+  };
+
   return (
     <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+      {!bgmPlaying && (
+        <button
+          type="button"
+          onClick={handleStartListen}
+          className="uiverse-push-btn inline-flex items-center gap-1.5 rounded-full border border-amber-200/75 bg-amber-500/85 px-3.5 py-2 text-xs font-black text-slate-950 shadow-lg transition hover:bg-amber-400 cursor-pointer"
+        >
+          <Music className="h-3.5 w-3.5 animate-bounce" />
+          Bấm nghe nhạc sảnh
+        </button>
+      )}
       {/* Nút Loa 3D nhấn lún kiểu UIverse */}
       <button
         type="button"

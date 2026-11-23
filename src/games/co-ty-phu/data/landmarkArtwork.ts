@@ -49,6 +49,8 @@ const NAME_TO_SLUG: Record<string, string> = {
   'Đồng Nai': 'dong_nai',
   'Bình Dương': 'binh_duong',
   'Sài Gòn': 'ben_thanh',
+  'Cao Bằng': 'cao_bang',
+  'Lạng Sơn': 'lang_son',
   // 6 ô tiện ích & đấu giá độc lập (2 Thủy Điện, 4 Bến Xe Đấu Giá — KHÔNG thuộc nhóm màu đất)
   'Thủy Điện Trị An': 'thuy_dien_tri_an',
   'Thủy Điện Hòa Bình': 'thuy_dien_hoa_binh',

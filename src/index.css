@@ -274,4 +274,30 @@
   .animate-dice-score-pop {
     animation: diceScorePop 380ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
+
+  /* Cảnh báo nhấp nháy Đỏ–Vàng thuần GPU (opacity) cho ô cuối cùng sắp giúp đối thủ thắng ngay */
+  @keyframes matchPointBorderBlink {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
+  }
+  .animate-matchpoint-overlay {
+    animation: matchPointBorderBlink 0.72s ease-in-out infinite;
+    will-change: opacity;
+  }
+
+  /* Chế độ Mượt cho Điện thoại / Máy yếu: tắt backdrop-blur & giảm bộ lọc nặng gây lag trên GPU di động */
+  [data-smooth-mode="true"] [class*="backdrop-blur"] {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  [data-smooth-mode="true"] .animate-standee-idle,
+  [data-smooth-mode="true"] .animate-monopoly-glow {
+    animation: none !important;
+  }
+  [data-smooth-mode="true"] .smooth-hide-blur {
+    display: none !important;
+  }
+  [data-smooth-mode="true"] [data-tile-index] {
+    contain: layout style paint;
+  }
 }

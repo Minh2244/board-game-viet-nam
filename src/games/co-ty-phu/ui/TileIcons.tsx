@@ -42,73 +42,100 @@ export function CornerParkingIcon({ className = 'h-5 w-5' }: { className?: strin
   );
 }
 
-/** Máy bay thương mại góc nhìn trực diện sắc nét cho ô góc Sân Bay Quốc Tế (ô 26) */
-export function CornerAirplaneIcon({ className = 'h-10 w-full' }: { className?: string }) {
+/** Máy bay thương mại 3D cất cánh qua tầng mây rực rỡ cho ô góc Sân Bay Quốc Tế (ô 26) */
+export function CornerAirplaneIcon({ className = 'h-12 w-full' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 96 50" className={className} aria-hidden="true">
+    <svg viewBox="0 0 120 84" className={className} aria-hidden="true">
       <defs>
-        <linearGradient id="airWing" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="airBody3d" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#FFFFFF" />
-          <stop offset="65%" stopColor="#E2E8F0" />
-          <stop offset="100%" stopColor="#94A3B8" />
+          <stop offset="65%" stopColor="#E0F2FE" />
+          <stop offset="100%" stopColor="#7DD3FC" />
         </linearGradient>
-        <linearGradient id="airBody" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#FFFFFF" />
-          <stop offset="60%" stopColor="#F1F5F9" />
+        <linearGradient id="airWing3d" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#F8FAFC" />
           <stop offset="100%" stopColor="#94A3B8" />
         </linearGradient>
       </defs>
-      {/* Đuôi đứng máy bay */}
-      <path d="M45 20 L48 3 L51 20 Z" fill="#F8FAFC" stroke="#1E3A8A" strokeWidth="1.2" strokeLinejoin="round" />
-      <path d="M47 9 L49 9 L49.6 17 L46.4 17 Z" fill="#0284C7" />
-      {/* Cánh đuôi ngang */}
-      <path d="M35 21 L48 18 L61 21 L60 23 L48 21.5 L36 23 Z" fill="#E2E8F0" stroke="#334155" strokeWidth="0.9" />
-      {/* Đôi cánh chính sải rộng */}
-      <path
-        d="M4 27 L41 22.5 L55 22.5 L92 27 L90 29.8 L56 28.5 L40 28.5 L6 29.8 Z"
-        fill="url(#airWing)"
-        stroke="#0F172A"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      {/* 2 Động cơ phản lực dưới cánh */}
-      <g>
-        <ellipse cx="30" cy="31.5" rx="4.4" ry="4.4" fill="#CBD5E1" stroke="#0F172A" strokeWidth="1.2" />
-        <circle cx="30" cy="31.5" r="2.7" fill="#1E293B" />
-        <circle cx="30" cy="31.5" r="1" fill="#94A3B8" />
-        <ellipse cx="66" cy="31.5" rx="4.4" ry="4.4" fill="#CBD5E1" stroke="#0F172A" strokeWidth="1.2" />
-        <circle cx="66" cy="31.5" r="2.7" fill="#1E293B" />
-        <circle cx="66" cy="31.5" r="1" fill="#94A3B8" />
+      {/* Mây bông trắng nổi 3D */}
+      <ellipse cx="24" cy="66" rx="22" ry="9.5" fill="#FFFFFF" opacity="0.86" />
+      <ellipse cx="38" cy="61" rx="15" ry="8.5" fill="#FFFFFF" opacity="0.92" />
+      <ellipse cx="96" cy="68" rx="23" ry="9.5" fill="#FFFFFF" opacity="0.82" />
+      <ellipse cx="83" cy="63" rx="14" ry="7.5" fill="#FFFFFF" opacity="0.9" />
+      {/* Máy bay thương mại cất cánh nghiêng năng động */}
+      <g transform="translate(60,38) rotate(-18) translate(-60,-38)">
+        <path
+          d="M44 37 L18 13 L33 13 L65 34 Z"
+          fill="url(#airWing3d)"
+          stroke="#0369A1"
+          strokeWidth="1.4"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M54 44 L36 69 L50 69 L72 44 Z"
+          fill="url(#airWing3d)"
+          stroke="#0369A1"
+          strokeWidth="1.4"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M22 33 L11 19 L22 19 L34 33 Z"
+          fill="#0284C7"
+          stroke="#FEF08A"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M19 38 C19 31, 46 28, 86 30 C103 31, 110 36, 110 39 C110 43, 101 46, 82 46 L25 45 C20 45, 19 42, 19 38 Z"
+          fill="url(#airBody3d)"
+          stroke="#0C4A6E"
+          strokeWidth="1.6"
+        />
+        <path d="M88 32 Q98 32 104 36 L93 37 Z" fill="#0F172A" />
+        <path d="M27 40.5 L94 40.5" stroke="#F59E0B" strokeWidth="2.4" strokeLinecap="round" />
+        <g fill="#0369A1">
+          <circle cx="43" cy="36" r="1.8" />
+          <circle cx="51" cy="36" r="1.8" />
+          <circle cx="59" cy="36" r="1.8" />
+          <circle cx="67" cy="36" r="1.8" />
+          <circle cx="75" cy="36" r="1.8" />
+        </g>
       </g>
-      {/* Càng bánh đáp */}
-      <line x1="48" y1="34" x2="48" y2="41.5" stroke="#475569" strokeWidth="2" />
-      <rect x="44.8" y="40.5" width="2.4" height="4.5" rx="1" fill="#0F172A" />
-      <rect x="48.8" y="40.5" width="2.4" height="4.5" rx="1" fill="#0F172A" />
-      <line x1="36" y1="30" x2="36" y2="39" stroke="#64748B" strokeWidth="1.5" />
-      <rect x="34.5" y="38" width="3" height="4.2" rx="1" fill="#0F172A" />
-      <line x1="60" y1="30" x2="60" y2="39" stroke="#64748B" strokeWidth="1.5" />
-      <rect x="58.5" y="38" width="3" height="4.2" rx="1" fill="#0F172A" />
-      {/* Thân mũi máy bay tròn sắc nét */}
-      <ellipse cx="48" cy="26.5" rx="8.6" ry="9.2" fill="url(#airBody)" stroke="#0F172A" strokeWidth="1.35" />
-      {/* Kính buồng lái phi công */}
-      <path d="M41.5 24.2 Q48 20.5 54.5 24.2 L53.2 26.8 Q48 24.6 42.8 26.8 Z" fill="#0F172A" />
-      <path d="M43 24.3 Q48 21.8 53 24.3" fill="none" stroke="#38BDF8" strokeWidth="0.9" opacity="0.8" />
-      {/* Dải sọc vàng xanh nhận diện hàng không Việt */}
-      <path d="M40.5 28.5 Q48 30.2 55.5 28.5" fill="none" stroke="#F59E0B" strokeWidth="1.3" />
-      <ellipse cx="48" cy="31.4" rx="2.5" ry="1.2" fill="#94A3B8" opacity="0.6" />
     </svg>
   );
 }
 
-export function CornerGoToJailIcon({ className = 'h-5 w-5' }: { className?: string }) {
+/** Còng tay thép 3D & đèn còi cảnh sát đỏ-xanh cho ô góc Vô Tù (ô 42) */
+export function CornerGoToJailIcon({ className = 'h-12 w-full' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 40 32" className={className} aria-hidden="true">
-      <circle cx="11" cy="19" r="7.5" fill="none" stroke="#1E293B" strokeWidth="3.2" />
-      <circle cx="11" cy="19" r="7.5" fill="none" stroke="#94A3B8" strokeWidth="1.2" />
-      <circle cx="29" cy="19" r="7.5" fill="none" stroke="#1E293B" strokeWidth="3.2" />
-      <circle cx="29" cy="19" r="7.5" fill="none" stroke="#94A3B8" strokeWidth="1.2" />
-      <path d="M16.5 13.5 L23.5 13.5" stroke="#475569" strokeWidth="3" strokeLinecap="round" />
-      <circle cx="20" cy="7" r="4" fill="#EF4444" stroke="#FEF08A" strokeWidth="1.2" />
+    <svg viewBox="0 0 120 84" className={className} aria-hidden="true">
+      <defs>
+        <radialGradient id="sirenRed3d" cx="35%" cy="28%" r="48%">
+          <stop offset="0%" stopColor="#EF4444" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="sirenBlue3d" cx="65%" cy="28%" r="48%">
+          <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.9" />
+          <stop offset="100%" stopColor="#38BDF8" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="cuffChrome3d" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="48%" stopColor="#CBD5E1" />
+          <stop offset="100%" stopColor="#475569" />
+        </linearGradient>
+      </defs>
+      <circle cx="42" cy="24" r="34" fill="url(#sirenRed3d)" />
+      <circle cx="78" cy="24" r="34" fill="url(#sirenBlue3d)" />
+      {/* Đèn còi cảnh sát 3D */}
+      <rect x="40" y="25" width="40" height="6.5" rx="2.5" fill="#1E293B" stroke="#94A3B8" strokeWidth="1.3" />
+      <path d="M44 25 V13.5 A8 8 0 0 1 60 13.5 V25 Z" fill="#EF4444" stroke="#FECACA" strokeWidth="1.2" />
+      <path d="M60 25 V13.5 A8 8 0 0 1 76 13.5 V25 Z" fill="#3B82F6" stroke="#BAE6FD" strokeWidth="1.2" />
+      {/* Còng tay thép bạc sáng bóng */}
+      <circle cx="36" cy="55" r="18.5" fill="none" stroke="#0F172A" strokeWidth="8.5" />
+      <circle cx="36" cy="55" r="18.5" fill="none" stroke="url(#cuffChrome3d)" strokeWidth="5.2" />
+      <circle cx="84" cy="55" r="18.5" fill="none" stroke="#0F172A" strokeWidth="8.5" />
+      <circle cx="84" cy="55" r="18.5" fill="none" stroke="url(#cuffChrome3d)" strokeWidth="5.2" />
+      <rect x="51" y="46" width="18" height="6.5" rx="3" fill="url(#cuffChrome3d)" stroke="#0F172A" strokeWidth="1.4" />
     </svg>
   );
 }
@@ -166,65 +193,78 @@ export function HeritageCitadelIcon({ className = 'h-4 w-4' }: { className?: str
   );
 }
 
-export function TaxStampIcon({ className = 'h-4 w-4' }: { className?: string }) {
+export function TaxStampIcon({ className = 'h-10 w-10' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 28 28" className={className} aria-hidden="true">
-      <circle cx="14" cy="14" r="11" fill="#FEF2F2" stroke="#FDE68A" strokeWidth="1.8" />
+    <svg viewBox="0 0 90 90" className={className} aria-hidden="true">
+      <defs>
+        <linearGradient id="taxGold3d" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#FEF9C3" />
+          <stop offset="55%" stopColor="#F59E0B" />
+          <stop offset="100%" stopColor="#92400E" />
+        </linearGradient>
+      </defs>
+      <circle cx="45" cy="45" r="34" fill="#7F1D1D" stroke="url(#taxGold3d)" strokeWidth="4.2" />
+      <circle cx="45" cy="45" r="26" fill="#FEF2F2" stroke="#B91C1C" strokeWidth="2.2" />
+      <circle cx="45" cy="45" r="21" fill="none" stroke="#FCA5A5" strokeWidth="1" strokeDasharray="3 2" />
       <text
-        x="14"
-        y="19"
+        x="45"
+        y="57"
         textAnchor="middle"
         fill="#991B1B"
-        fontSize="14"
+        fontSize="36"
         fontWeight="900"
-        fontFamily="serif"
+        fontFamily="Georgia, serif"
       >
         ₫
       </text>
+      <circle cx="73" cy="21" r="9" fill="url(#taxGold3d)" stroke="#78350F" strokeWidth="1.5" />
     </svg>
   );
 }
 
-/** Biểu tượng Cơ Hội (?) hoa văn cổ điển ánh mặt trời lấp lánh */
-export function ChanceSymbolSvg({ className = 'h-7 w-7' }: { className?: string }) {
+/** Biểu tượng Cơ Hội (?) 3D ánh mặt trời vàng kim lộng lẫy */
+export function ChanceSymbolSvg({ className = 'h-10 w-10' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 56 56" className={className} aria-hidden="true">
+    <svg viewBox="0 0 90 90" className={className} aria-hidden="true">
       <defs>
-        <radialGradient id="chSun" cx="50%" cy="45%" r="55%">
-          <stop offset="0%" stopColor="#FEF9C3" stopOpacity="0.95" />
+        <radialGradient id="chSun3d" cx="50%" cy="46%" r="54%">
+          <stop offset="0%" stopColor="#FEF9C3" />
           <stop offset="55%" stopColor="#F59E0B" stopOpacity="0.45" />
           <stop offset="100%" stopColor="#78350F" stopOpacity="0" />
         </radialGradient>
+        <linearGradient id="chGold3d" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#FFFBEB" />
+          <stop offset="48%" stopColor="#FDE047" />
+          <stop offset="100%" stopColor="#B45309" />
+        </linearGradient>
       </defs>
-      <circle cx="28" cy="28" r="26" fill="url(#chSun)" />
-      {/* 8 tia sáng tỏa ra cổ điển */}
+      <circle cx="45" cy="45" r="42" fill="url(#chSun3d)" />
       {Array.from({ length: 8 }).map((_, i) => (
         <line
           key={i}
-          x1="28"
-          y1="4"
-          x2="28"
-          y2="11"
+          x1="45"
+          y1="5"
+          x2="45"
+          y2="14"
           stroke="#FEF08A"
-          strokeWidth="1.8"
+          strokeWidth="2.4"
           strokeLinecap="round"
-          opacity="0.85"
-          transform={`rotate(${i * 45} 28 28)`}
+          opacity="0.88"
+          transform={`rotate(${i * 45} 45 45)`}
         />
       ))}
-      <circle cx="28" cy="28" r="18.5" fill="rgba(120,53,15,0.45)" stroke="#FEF08A" strokeWidth="2" />
-      <circle cx="28" cy="28" r="15" fill="none" stroke="#FDE68A" strokeWidth="0.9" strokeDasharray="3 2" opacity="0.85" />
-      {/* Ngôi sao 4 cánh lấp lánh */}
-      <polygon points="10,13 11.4,15.6 14,17 11.4,18.4 10,21 8.6,18.4 6,17 8.6,15.6" fill="#FEF9C3" />
-      <polygon points="46,35 47,37 49,38 47,39 46,41 45,39 43,38 45,37" fill="#FEF08A" />
+      <circle cx="45" cy="45" r="30" fill="rgba(120,53,15,0.56)" stroke="url(#chGold3d)" strokeWidth="3.2" />
+      <circle cx="45" cy="45" r="24" fill="none" stroke="#FEF08A" strokeWidth="1.3" strokeDasharray="4 3" opacity="0.9" />
+      <polygon points="15,17 17,21 21,23 17,25 15,29 13,25 9,23 13,21" fill="#FEF9C3" />
+      <polygon points="75,61 77,65 81,67 77,69 75,73 73,69 69,67 73,65" fill="#FEF08A" />
       <text
-        x="28"
-        y="37"
+        x="45"
+        y="60"
         textAnchor="middle"
-        fill="#FFFBEB"
+        fill="url(#chGold3d)"
         stroke="#78350F"
-        strokeWidth="1.6"
-        fontSize="27"
+        strokeWidth="2.2"
+        fontSize="44"
         fontWeight="900"
         fontFamily="Georgia, serif"
       >
@@ -234,43 +274,44 @@ export function ChanceSymbolSvg({ className = 'h-7 w-7' }: { className?: string 
   );
 }
 
-/** Biểu tượng Khí Vận (!) hoa văn huyền bí ánh tím pha lê & trăng sao */
-export function FateSymbolSvg({ className = 'h-7 w-7' }: { className?: string }) {
+/** Biểu tượng Khí Vận (!) 3D quả cầu pha lê tím & vòng sao vàng huyền bí */
+export function FateSymbolSvg({ className = 'h-10 w-10' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 56 56" className={className} aria-hidden="true">
+    <svg viewBox="0 0 90 90" className={className} aria-hidden="true">
       <defs>
-        <radialGradient id="ftAura" cx="50%" cy="45%" r="55%">
-          <stop offset="0%" stopColor="#F5D0FE" stopOpacity="0.9" />
-          <stop offset="55%" stopColor="#9333EA" stopOpacity="0.45" />
-          <stop offset="100%" stopColor="#2E1065" stopOpacity="0" />
+        <radialGradient id="ftOrb3d" cx="40%" cy="35%" r="58%">
+          <stop offset="0%" stopColor="#FDF4FF" />
+          <stop offset="45%" stopColor="#C084FC" />
+          <stop offset="100%" stopColor="#4C1D95" />
         </radialGradient>
+        <linearGradient id="ftRing3d" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FEF08A" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
       </defs>
-      <circle cx="28" cy="28" r="26" fill="url(#ftAura)" />
-      {/* Khung bát giác huyền bí cổ điển */}
-      <polygon
-        points="28,4 45,11 52,28 45,45 28,52 11,45 4,28 11,11"
-        fill="rgba(59,7,100,0.52)"
-        stroke="#E9D5FF"
-        strokeWidth="1.8"
-      />
-      <polygon
-        points="28,9 41,15 47,28 41,41 28,47 15,41 9,28 15,15"
+      <ellipse
+        cx="45"
+        cy="45"
+        rx="38"
+        ry="15"
+        transform="rotate(-24 45 45)"
         fill="none"
-        stroke="#FDE68A"
-        strokeWidth="1"
-        strokeDasharray="3 2"
-        opacity="0.85"
+        stroke="url(#ftRing3d)"
+        strokeWidth="2.8"
+        opacity="0.92"
       />
-      <polygon points="45,12 46.2,14.2 48.5,15.5 46.2,16.8 45,19 43.8,16.8 41.5,15.5 43.8,14.2" fill="#FEF08A" />
-      <polygon points="11,37 12,39 14,40 12,41 11,43 10,41 8,40 10,39" fill="#E9D5FF" />
+      <circle cx="45" cy="45" r="27" fill="url(#ftOrb3d)" stroke="#F5D0FE" strokeWidth="2.4" />
+      <ellipse cx="36" cy="34" rx="7" ry="4" transform="rotate(-25 36 34)" fill="#FFFFFF" opacity="0.58" />
+      <polygon points="18,64 20,68 24,70 20,72 18,76 16,72 12,70 16,68" fill="#FEF08A" />
+      <polygon points="73,16 74.5,19 77.5,20.5 74.5,22 73,25 71.5,22 68.5,20.5 71.5,19" fill="#F5D0FE" />
       <text
-        x="28"
-        y="37"
+        x="45"
+        y="59"
         textAnchor="middle"
-        fill="#FAF5FF"
+        fill="#FFFBEB"
         stroke="#3B0764"
-        strokeWidth="1.6"
-        fontSize="27"
+        strokeWidth="2.2"
+        fontSize="42"
         fontWeight="900"
         fontFamily="Georgia, serif"
       >

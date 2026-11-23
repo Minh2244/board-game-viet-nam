@@ -48,7 +48,6 @@ export function HubScreen({ onLaunchGame }: HubScreenProps) {
       window.removeEventListener('pointerdown', unlockAndPlayBgm);
       window.removeEventListener('keydown', unlockAndPlayBgm);
       document.removeEventListener('visibilitychange', handleVisibility);
-      soundEngine.setHubActive(false);
     };
   }, []);
 
@@ -69,7 +68,6 @@ export function HubScreen({ onLaunchGame }: HubScreenProps) {
 
   const handleSelectGame = (game: IGameEntry) => {
     if (game.status === 'READY' && game.loader) {
-      soundEngine.setHubActive(false);
       soundEngine.playEnterGame();
       onLaunchGame(game.id);
       return;

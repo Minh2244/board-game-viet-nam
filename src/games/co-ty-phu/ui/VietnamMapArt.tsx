@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 /**
  * Bản đồ địa lý Việt Nam chuẩn hình chữ S (từ biên giới & đường bờ biển thực tế)
  * kết hợp Trống Đồng Đông Sơn, Sông Hồng, Sông Mê Kông, Phú Quốc, Côn Đảo, Hoàng Sa & Trường Sa.
@@ -15,7 +17,7 @@ const CAT_BA_PATH =
 const VAN_DON_PATH =
   'M 269.6 112.0 L 267.9 112.8 L 265.8 112.7 L 268.3 111.1 L 270.6 108.4 L 270.6 110.2 Z';
 
-export function VietnamMapArt() {
+export const VietnamMapArt = memo(function VietnamMapArt() {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
       {/* Lưới hải đồ cổ điển + sóng Biển Đông nhẹ + hoa gió la bàn */}
@@ -255,4 +257,4 @@ export function VietnamMapArt() {
       </svg>
     </div>
   );
-}
+});
