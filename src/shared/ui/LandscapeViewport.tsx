@@ -42,13 +42,11 @@ function detectCoarsePointer(): boolean {
   return Boolean(window.matchMedia?.('(pointer: coarse)').matches);
 }
 
-function computeViewportMetrics(forceLandscape: boolean): ViewportMetrics {
+function computeViewportMetrics(forceLandscape = true): ViewportMetrics {
   const vw = Math.max(320, Math.round(window.visualViewport?.width ?? window.innerWidth));
   const vh = Math.max(240, Math.round(window.visualViewport?.height ?? window.innerHeight));
   const isMobileLite = vw < 920 || vh < 540 || detectCoarsePointer();
 
-  // Tầng 1: Tại Sảnh ngoài / Chọn chế độ / Phòng chờ (forceLandscape = false):
-  // Điện thoại hiển thị 100% tự nhiên theo đúng chiều cầm máy — KHÔNG ép xoay 90° hay scale texture khổng lồ!
   if (!forceLandscape) {
     return {
       vw,
@@ -62,8 +60,8 @@ function computeViewportMetrics(forceLandscape: boolean): ViewportMetrics {
     };
   }
 
-  // Tầng 2: Khi bước vào bàn cờ (forceLandscape = true):
-  // Trên điện thoại cầm dọc (cao > rộng & bề ngang < 920px): xoay ngang 90° và thu tỷ lệ vừa khít 100% bàn cờ 17×11
+  // Luôn hiển thị toàn bộ Web (cả Sảnh, Phòng chờ lẫn Bàn cờ) ở chế độ Màn hình Ngang (Landscape):
+  // Trên điện thoại cầm dọc (cao > rộng & bề ngang < 920px): tự xoay ngang 90° và thu tỷ lệ vừa khít 100% khung hình
   const rotated = vh > vw && vw < 920;
   const availW = rotated ? vh : vw;
   const availH = rotated ? vw : vh;
@@ -99,8 +97,8 @@ export function useLandscapeStage(): LandscapeStageContextValue {
  * - Trong Bàn Cờ (`forceLandscape = true`): tự xoay ngang 90° khi cầm dọc và cung cấp hệ tọa độ `toLocalRect` chuẩn xác.
  */
 export function LandscapeViewport({ children }: { children: ReactNode }) {
-  const [forceLandscape, setForceLandscapeState] = useState(false);
-  const [metrics, setMetrics] = useState<ViewportMetrics>(() => computeViewportMetrics(false));
+  const [forceLandscape, setForceLandscapeState] = useState(true);
+  const [metrics, setMetrics] = useState<ViewportMetrics>(() => computeViewportMetrics(true));
   const metricsRef = useRef(metrics);
   metricsRef.current = metrics;
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { soundEngine } from '@/shared/audio/soundEngine';
 import type { IGameEntry } from '@/shared/types/gameEntry';
+import { useLandscapeStage } from '@/shared/ui/LandscapeViewport';
 import { GameCard } from './GameCard';
 
 interface HorizontalGameShelfProps {
@@ -9,6 +10,7 @@ interface HorizontalGameShelfProps {
 }
 
 export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelfProps) {
+  const { rotated, scale } = useLandscapeStage();
   const scrollerRef = useRef<HTMLDivElement>(null);
   const programmaticUntilRef = useRef(0);
   const scrollRafRef = useRef(0);
@@ -19,7 +21,7 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
 
   const dragState = useRef({
     active: false,
-    startX: 0,
+    startCoord: 0,
     startScrollLeft: 0,
     movedDistance: 0,
   });
@@ -88,13 +90,12 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Trên màn hình cảm ứng (touch), để trình duyệt vuốt native 60fps thay vì ghi đè bằng JS!
-    if (e.pointerType === 'touch') return;
     const container = scrollerRef.current;
     if (!container || container.scrollWidth <= container.clientWidth + 4) return;
+    const coord = rotated ? e.clientY : e.clientX;
     dragState.current = {
       active: true,
-      startX: e.clientX,
+      startCoord: coord,
       startScrollLeft: container.scrollLeft,
       movedDistance: 0,
     };
@@ -102,11 +103,12 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragState.current.active || !scrollerRef.current) return;
-    const dx = e.clientX - dragState.current.startX;
-    dragState.current.movedDistance = Math.max(dragState.current.movedDistance, Math.abs(dx));
+    const coord = rotated ? e.clientY : e.clientX;
+    const delta = (coord - dragState.current.startCoord) / Math.max(0.25, scale);
+    dragState.current.movedDistance = Math.max(dragState.current.movedDistance, Math.abs(delta));
     if (dragState.current.movedDistance > 10) {
       if (!isDragging) setIsDragging(true);
-      scrollerRef.current.scrollLeft = dragState.current.startScrollLeft - dx;
+      scrollerRef.current.scrollLeft = dragState.current.startScrollLeft - delta;
     }
   };
 

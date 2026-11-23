@@ -920,15 +920,9 @@ export function GameBoardView({
   const lastChargeTickRef = useRef<number>(0);
   const lastRollPowerRef = useRef<number>(0.58);
 
-  const { stageW, stageH, scale, rotated, isCompactDevice, setForceLandscape, toLocalRect } =
+  const { stageW, stageH, scale, rotated, isCompactDevice, toLocalRect } =
     useLandscapeStage();
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Chỉ bật khung sân khấu ngang 17×11 khi thực sự đang ở trong bàn cờ (Sảnh & Phòng chờ hiển thị tự nhiên 60fps trên điện thoại)
-  useEffect(() => {
-    setForceLandscape(true);
-    return () => setForceLandscape(false);
-  }, [setForceLandscape]);
 
   // Chế độ Mượt: tự bật sẵn trên Điện thoại/Tablet nhỏ để chống lag 60fps, PC mặc định tắt (có thể bật/tắt bất cứ lúc nào)
   const [smoothMode, setSmoothMode] = useState<boolean>(() => {
