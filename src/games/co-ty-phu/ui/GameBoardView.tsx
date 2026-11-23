@@ -2034,20 +2034,18 @@ export function GameBoardView({
         sceneRef.current?.setImmediateDice(nextState.lastDiceValues);
         setLiveDice(null);
         setDisplayState(nextState);
-        isAnimatingRef.current = false;
-        setIsAnimating(false);
         measureTileRects();
 
-        // Xử lý tiếp nước đi Online đang xếp hàng (nếu có)
+        // Xử lý nối tiếp ngay nước đi Online đang xếp hàng (giữ khóa isAnimating để không bị chèn ngang 40ms!)
         const queued = remoteQueueRef.current.shift();
         if (queued) {
-          setTimeout(() => {
-            if (mountedRef.current) {
-              void dispatchAction(queued.action, queued.rollPower, {
-                resultingState: queued.resultingState,
-              });
-            }
-          }, 40);
+          isAnimatingRef.current = false;
+          void dispatchAction(queued.action, queued.rollPower, {
+            resultingState: queued.resultingState,
+          });
+        } else {
+          isAnimatingRef.current = false;
+          setIsAnimating(false);
         }
       }
     },

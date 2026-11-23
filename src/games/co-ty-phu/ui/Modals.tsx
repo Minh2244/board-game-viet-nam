@@ -608,10 +608,10 @@ const COLOR_GROUP_RULE_ROWS: readonly { id: number; cities: string; range: strin
   { id: 1, cities: 'Mộc Châu · Hà Giang · Sa Pa', range: '1 – 1,4 Tr' },
   { id: 2, cities: 'Lý Sơn · Vĩnh Hy · Phú Yên', range: '1,4 – 1,8 Tr' },
   { id: 11, cities: 'Thanh Hóa · Nghệ An (Nhóm 2 ô)', range: '1,6 – 1,8 Tr' },
-  { id: 3, cities: 'Bắc Ninh · Ba Vì · Hà Nội', range: '1,8 – 2,2 Tr' },
+  { id: 3, cities: 'Bắc Ninh · Hà Nội · Ba Vì', range: '1,8 – 2,2 Tr' },
   { id: 4, cities: 'Kon Tum · Buôn Ma Thuột · Đà Lạt', range: '2 – 2,6 Tr' },
-  { id: 12, cities: 'Cao Bằng · Lạng Sơn (Nhóm 2 ô)', range: '2,2 – 2,6 Tr' },
   { id: 5, cities: 'Quảng Bình · Cố Đô Huế · Hội An', range: '2,6 – 3,4 Tr' },
+  { id: 12, cities: 'Cao Bằng · Lạng Sơn (Nhóm 2 ô)', range: '2,2 – 2,6 Tr' },
   { id: 6, cities: 'Phan Thiết · Vũng Tàu · Côn Đảo', range: '3 – 3,8 Tr' },
   { id: 7, cities: 'Quy Nhơn · Nha Trang · Đà Nẵng', range: '3,8 – 4,4 Tr' },
   { id: 8, cities: 'Mỹ Tho · Cần Thơ · Phú Quốc', range: '3,8 – 4,4 Tr' },
@@ -747,7 +747,7 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
               <div className="space-y-3.5">
                 <p>
                   Bàn cờ đối xứng gồm <strong>34 Ô Đất Địa Danh Việt Nam</strong> (<em>10 Dưới · 7 Trái · 10 Trên · 7 Phải</em>) chia thành{' '}
-                  <strong className="text-amber-300">12 Nhóm Màu</strong> (10 nhóm 3 ô + 2 nhóm 2 ô), tối đa 6 ô đất đắt giá 5–6 Tr rải xen kẽ trên 3 cạnh sau. Gom đủ cả nhóm màu sẽ kích hoạt{' '}
+                  <strong className="text-amber-300">12 Nhóm Màu đứng liền cụm nhau</strong> theo chiều kim đồng hồ (10 nhóm 3 ô + 2 nhóm 2 ô), tăng dần từ Khởi điểm tới Đất Vàng 5–6 Tr ở cạnh cuối. Gom đủ cả nhóm màu sẽ kích hoạt{' '}
                   <strong className="text-emerald-300">ĐỘC QUYỀN ×2 TIỀN THUÊ</strong>!
                 </p>
                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
