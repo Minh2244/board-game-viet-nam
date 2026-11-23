@@ -134,7 +134,6 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
       doc = all.data as StoredRoomDocument;
     }
     if (!doc) return null;
-    // Hợp nhất các field `hb:<token>` độc lập (không bao giờ bị race condition)
     const separateHbs = parseHeartbeatsFromHash(all);
     doc.heartbeats = { ...(doc.heartbeats || {}), ...separateHbs };
     return doc;

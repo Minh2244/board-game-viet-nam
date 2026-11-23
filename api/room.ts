@@ -1,4 +1,4 @@
-import { handleRoomGet, handleRoomPost } from '../server/roomStore';
+import { handleRoomGet, handleRoomPost } from './_roomStore.js';
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {

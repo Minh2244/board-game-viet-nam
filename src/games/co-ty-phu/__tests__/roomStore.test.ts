@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handleRoomGet, handleRoomPost } from '../../../../server/roomStore';
+import { handleRoomGet, handleRoomPost } from '../../../../api/_roomStore';
 
 describe('Room Store (/api/room) — Mã 6 số chống trùng, F5 Rejoin, Cách ly game & Giải tán', () => {
   it('Tạo phòng cấp mã 6 số không trùng (HSETNX), sai mã báo 404 tức thì, cách ly theo game', async () => {

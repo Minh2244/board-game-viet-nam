@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, type Plugin } from 'vite';
-import { handleRoomGet, handleRoomPost } from './server/roomStore';
+import { handleRoomGet, handleRoomPost } from './api/_roomStore';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
