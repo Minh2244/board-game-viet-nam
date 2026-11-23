@@ -49,7 +49,7 @@ export class MonopolySceneController {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(
-      lowPowerMode ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+      lowPowerMode ? 0.72 : Math.min(window.devicePixelRatio || 1, 2),
     );
     this.renderer.shadowMap.enabled = !lowPowerMode;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -85,7 +85,7 @@ export class MonopolySceneController {
     if (this.disposed || this.lowPowerMode === enabled) return;
     this.lowPowerMode = enabled;
     this.diceActor.setLowPowerMode(enabled);
-    this.renderer.setPixelRatio(enabled ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(enabled ? 0.72 : Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = !enabled;
     this.shadowFloor.visible = !enabled;
     this.renderSingleFrame();

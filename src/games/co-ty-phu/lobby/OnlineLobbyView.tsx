@@ -177,10 +177,10 @@ export function OnlineLobbyView({
           </div>
         </header>
 
-        {/* SẢNH PHÒNG CHỜ ONLINE 2 CỘT (1 cột gọn trên điện thoại dọc) */}
-        <main className="mx-auto grid w-full max-w-[1140px] flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+        {/* SẢNH PHÒNG CHỜ ONLINE 2 CỘT TRÁI – PHẢI TRÊN KHUNG NGANG 1220×590 */}
+        <main className="mx-auto grid w-full max-w-[1140px] flex-1 grid-cols-12 gap-4">
           {/* CỘT TRÁI (7 CỘT): GHẾ NGƯỜI + MÁY (0–4) + CÀI ĐẶT + NÚT BẮT ĐẦU */}
-          <section className="mobile-flat-shadow flex flex-col gap-3.5 rounded-[24px] border border-cyan-400/45 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-7">
+          <section className="mobile-flat-shadow col-span-7 flex flex-col gap-3 rounded-[24px] border border-cyan-400/45 bg-slate-900/92 p-4 shadow-2xl backdrop-blur-md">
             {/* Thanh tiêu đề & Bộ chọn Số Máy (0–4) */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
               <div>
@@ -228,7 +228,7 @@ export function OnlineLobbyView({
             </div>
 
             {/* Lưới 6 ghế (Người đã vào + Máy + Ghế trống chờ bạn bè) */}
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2.5">
               {allActiveMembers.map((member) => {
                 const charInfo =
                   CO_TY_PHU_CHARACTERS.find((c) => c.id === member.characterId) ??
@@ -444,7 +444,7 @@ export function OnlineLobbyView({
 
           {/* CỘT PHẢI (5 CỘT): TÙY CHỈNH TÊN + MÀU ĐẤT + NHÂN VẬT CHIBI REALTIME */}
           {editableMember && (
-            <section className="mobile-flat-shadow flex flex-col justify-between gap-2.5 rounded-[24px] border border-amber-300/35 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-5">
+            <section className="mobile-flat-shadow col-span-5 flex flex-col justify-between gap-2.5 rounded-[24px] border border-amber-300/35 bg-stone-900/92 p-4 shadow-2xl backdrop-blur-md">
               <div className="w-full text-center">
                 <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-amber-200">
                   <span

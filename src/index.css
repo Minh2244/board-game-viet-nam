@@ -383,11 +383,23 @@
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
+[data-smooth-mode="true"] [class*="drop-shadow"],
+[data-mobile-lite="true"] [class*="drop-shadow"] {
+  filter: none !important;
+}
 [data-mobile-lite="true"] .animate-hub-card,
 [data-mobile-lite="true"] .animate-bounce,
 [data-mobile-lite="true"] .animate-tap-ring,
+[data-mobile-lite="true"] .animate-ping,
+[data-mobile-lite="true"] .animate-cash-arc,
+[data-mobile-lite="true"] .animate-standee-idle,
+[data-mobile-lite="true"] .animate-monopoly-glow,
+[data-mobile-lite="true"] .drum-spin-slow,
+[data-smooth-mode="true"] .animate-ping,
+[data-smooth-mode="true"] .animate-cash-arc,
 [data-smooth-mode="true"] .animate-standee-idle,
-[data-smooth-mode="true"] .animate-monopoly-glow {
+[data-smooth-mode="true"] .animate-monopoly-glow,
+[data-smooth-mode="true"] .drum-spin-slow {
   animation: none !important;
 }
 [data-mobile-lite="true"] .mobile-flat-shadow {
@@ -397,6 +409,7 @@
 [data-mobile-lite="true"] .smooth-hide-blur {
   display: none !important;
 }
-[data-smooth-mode="true"] [data-tile-index] {
+[data-smooth-mode="true"] [data-tile-index],
+[data-mobile-lite="true"] [data-tile-index] {
   contain: layout style paint;
 }

@@ -96,9 +96,9 @@ export function ModeSelectView({
         className="pointer-events-none absolute inset-0 bg-gradient-to-br from-stone-950/70 via-emerald-950/50 to-slate-950/78"
       />
 
-      <div className="relative z-10 mx-auto flex min-h-full w-full max-w-[1040px] flex-col justify-between gap-4 px-3.5 py-4 sm:px-6 sm:py-5">
-        {/* Thanh trên thoáng gọn — tự động xếp gọn trên điện thoại cầm dọc */}
-        <header className="flex flex-wrap items-center justify-between gap-2.5 sm:grid sm:grid-cols-3 sm:gap-3">
+      <div className="relative z-10 mx-auto flex h-full w-full max-w-[1060px] flex-col justify-between gap-3 px-6 py-4">
+        {/* Thanh trên 3 cột cân xứng trên khung ngang 1220×590 */}
+        <header className="grid grid-cols-3 items-center gap-3">
           <div className="flex justify-start">
             <button
               type="button"
@@ -106,7 +106,7 @@ export function ModeSelectView({
                 soundEngine.playPushClick();
                 onBackToHub();
               }}
-              className="uiverse-push-btn uiverse-dome-shine inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-black tracking-wide text-white cursor-pointer sm:gap-2 sm:px-4 sm:text-sm"
+              className="uiverse-push-btn uiverse-dome-shine inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-black tracking-wide text-white cursor-pointer"
               style={{
                 background: 'linear-gradient(135deg, #FBBF24 0%, #F97316 100%)',
                 boxShadow: '0 4px 0 #9A3412, 0 8px 18px rgba(0,0,0,0.35)',
@@ -117,11 +117,11 @@ export function ModeSelectView({
             </button>
           </div>
 
-          <div className="order-3 w-full text-center sm:order-none sm:w-auto">
-            <h1 className="whitespace-nowrap text-xl font-black tracking-[0.06em] text-amber-300 drop-shadow-[0_3px_10px_rgba(0,0,0,0.7)] sm:text-[28px] sm:tracking-[0.08em]">
+          <div className="text-center">
+            <h1 className="whitespace-nowrap text-[26px] font-black tracking-[0.07em] text-amber-300 drop-shadow-[0_3px_10px_rgba(0,0,0,0.7)]">
               CỜ TỶ PHÚ VIỆT NAM 3D
             </h1>
-            <p className="mt-0.5 text-[11px] font-semibold tracking-[0.06em] text-emerald-100/80 uppercase sm:text-xs">
+            <p className="mt-0.5 text-xs font-semibold tracking-[0.06em] text-emerald-100/80 uppercase">
               Chọn chế độ chơi
             </p>
           </div>
@@ -180,10 +180,10 @@ export function ModeSelectView({
           </div>
         )}
 
-        {/* 2 THẺ CHẾ ĐỘ CHƠI CÂN XỨNG — Xếp 1 cột gọn trên điện thoại dọc, 2 cột trên PC/ngang */}
-        <main className="my-auto grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12 lg:gap-6">
+        {/* 2 THẺ CHẾ ĐỘ CHƠI CÂN XỨNG TRÁI – PHẢI TRÊN KHUNG NGANG 1220×590 */}
+        <main className="my-auto grid grid-cols-12 items-stretch gap-5">
           {/* THẺ 1 (TRÁI): CHƠI VỚI MÁY & 1 THIẾT BỊ NHIỀU NGƯỜI (GOM CHUNG) */}
-          <section className="mobile-flat-shadow flex flex-col justify-between gap-4 rounded-[26px] border-2 border-emerald-400/50 bg-stone-950/88 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.52)] backdrop-blur-md sm:gap-5 sm:rounded-[30px] sm:p-6 lg:col-span-6">
+          <section className="mobile-flat-shadow col-span-6 flex flex-col justify-between gap-4 rounded-[28px] border-2 border-emerald-400/50 bg-stone-950/90 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.52)] backdrop-blur-md">
             {/* Đầu thẻ */}
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
@@ -318,7 +318,7 @@ export function ModeSelectView({
           </section>
 
           {/* THẺ 2 (PHẢI): CHƠI ONLINE KHÁC MẠNG (CHỦ PHÒNG & NHẬP MÃ 6 SỐ) */}
-          <section className="mobile-flat-shadow flex flex-col justify-between gap-4 rounded-[26px] border-2 border-cyan-400/50 bg-slate-950/88 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.55)] backdrop-blur-md sm:gap-5 sm:rounded-[30px] sm:p-6 lg:col-span-6">
+          <section className="mobile-flat-shadow col-span-6 flex flex-col justify-between gap-4 rounded-[28px] border-2 border-cyan-400/50 bg-slate-950/90 p-5 shadow-[0_20px_50px_rgba(0,0,0,0.55)] backdrop-blur-md">
             {/* Đầu thẻ */}
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">

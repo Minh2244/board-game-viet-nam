@@ -739,7 +739,7 @@ const BoardTileCell = memo(function BoardTileCell({
         )}
 
         <span
-          className={`w-full px-0.5 pt-[2px] text-[9px] leading-[1.22] font-black tracking-tight drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)] ${
+          className={`w-full px-0.5 pt-[2px] text-[9px] leading-[1.22] font-black tracking-tight [text-shadow:0_1px_3px_rgba(0,0,0,0.98)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)] ${
             tile.kind === 'AUCTION_STATION'
               ? 'text-amber-200'
               : tile.kind === 'UTILITY'
@@ -750,7 +750,7 @@ const BoardTileCell = memo(function BoardTileCell({
           {topTitle}
         </span>
         {priceText && (
-          <span className="mt-[1px] max-w-full whitespace-nowrap px-0.5 text-[9.5px] leading-[1.15] font-black text-amber-200 drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)]">
+          <span className="mt-[1px] max-w-full whitespace-nowrap px-0.5 text-[9.5px] leading-[1.15] font-black text-amber-200 [text-shadow:0_1px_3px_rgba(0,0,0,0.98)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)]">
             {priceText}
           </span>
         )}
@@ -966,6 +966,7 @@ export function GameBoardView({
   const chanceDeckRef = useRef<HTMLDivElement | null>(null);
   const fateDeckRef = useRef<HTMLDivElement | null>(null);
   const playerRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pawnElRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const mountedRef = useRef(true);
   const lastTurnPlayerIdRef = useRef<string>(initialState.players[initialState.currentPlayerIndex]?.id ?? '');
 
@@ -1112,13 +1113,14 @@ export function GameBoardView({
 
   const getTileCenter = useCallback(
     (tileIndex: number): { x: number; y: number } => {
+      // Ưu tiên dùng tọa độ đã đo sẵn trong tileRectsRef để KHÔNG gọi getBoundingClientRect() gây giật lag giữa hoạt ảnh!
+      const cached = tileRectsRef.current[tileIndex];
+      if (cached) {
+        return { x: cached.x, y: cached.y };
+      }
       const el = tileElRefs.current[tileIndex];
       const lr = toLocalRect(el);
-      if (lr) {
-        return { x: lr.cx, y: lr.cy };
-      }
-      const cached = tileRectsRef.current[tileIndex];
-      return cached ? { x: cached.x, y: cached.y } : { x: stageW / 2, y: stageH / 2 };
+      return lr ? { x: lr.cx, y: lr.cy } : { x: stageW / 2, y: stageH / 2 };
     },
     [toLocalRect, stageW, stageH],
   );
@@ -1362,6 +1364,7 @@ export function GameBoardView({
 
       await new Promise<void>((resolve) => {
         const tStart = performance.now();
+        let lastCommitTime = 0;
 
         const tick = (now: number) => {
           if (!mountedRef.current) {
@@ -1389,26 +1392,31 @@ export function GameBoardView({
             onArrive();
           }
 
-          setCashTransfers((prev) => {
-            const exists = prev.some((tr) => tr.id === id);
-            const updated: ActiveCashTransfer = {
-              id,
-              startX: start.x,
-              startY: start.y,
-              ctrlX,
-              ctrlY,
-              endX: end.x,
-              endY: end.y,
-              amount: absAmount,
-              tone,
-              fromName,
-              toName,
-              reasonText: cleanedReason,
-              progress: t,
-              items,
-            };
-            return exists ? prev.map((tr) => (tr.id === id ? updated : tr)) : [...prev, updated];
-          });
+          // Trên điện thoại (smoothMode), giới hạn cập nhật React state ở ~30fps để không nghẽn luồng chính
+          const minStepMs = smoothModeRef.current ? 32 : 0;
+          if (t >= 1 || now - lastCommitTime >= minStepMs) {
+            lastCommitTime = now;
+            setCashTransfers((prev) => {
+              const exists = prev.some((tr) => tr.id === id);
+              const updated: ActiveCashTransfer = {
+                id,
+                startX: start.x,
+                startY: start.y,
+                ctrlX,
+                ctrlY,
+                endX: end.x,
+                endY: end.y,
+                amount: absAmount,
+                tone,
+                fromName,
+                toName,
+                reasonText: cleanedReason,
+                progress: t,
+                items,
+              };
+              return exists ? prev.map((tr) => (tr.id === id ? updated : tr)) : [...prev, updated];
+            });
+          }
 
           if (t < 1) {
             requestAnimationFrame(tick);
@@ -1436,7 +1444,11 @@ export function GameBoardView({
     [getEntityBoardAnchor, toLocalRect, triggerBankPulse, showTransientBankNote, triggerPawnReaction, spawnShockwave],
   );
 
-  /** Diễn hoạt Standee Chibi 2.5D nhún – nghiêng người bật nhảy từng ô + vệt sao & sóng chạm đất */
+  /**
+   * Diễn hoạt Standee Chibi 2.5D nhún – nghiêng người bật nhảy từng ô:
+   * Cập nhật trực tiếp style DOM trên `pawnElRefs` trong requestAnimationFrame (0 lần re-render React giữa mỗi bước nhảy!)
+   * giúp điện thoại đạt chuẩn 60fps tuyệt đối không giật lag!
+   */
   const animateDomPawnPath = useCallback(
     async (
       playerId: string,
@@ -1447,7 +1459,7 @@ export function GameBoardView({
       charId?: PlayerState['characterId'],
     ) => {
       let fromIdx = startIndex;
-      const stepMs = path.length > 8 ? 165 : 215;
+      const stepMs = path.length > 8 ? 155 : 200;
 
       for (let i = 0; i < path.length; i += 1) {
         const toIdx = path[i];
@@ -1485,7 +1497,13 @@ export function GameBoardView({
               scaleY = 1 - 0.2 * l;
             }
 
-            if (mountedRef.current) {
+            const pawnEl = pawnElRefs.current[playerId];
+            if (pawnEl) {
+              pawnEl.style.left = `${x}px`;
+              pawnEl.style.top = `${y}px`;
+              pawnEl.style.zIndex = '45';
+              pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
+            } else if (mountedRef.current) {
               setActivePawnAnim({ playerId, x, y, liftY, scaleX, scaleY, tiltDeg });
             }
 
@@ -1498,7 +1516,7 @@ export function GameBoardView({
           requestAnimationFrame(tick);
         });
 
-        if (mountedRef.current) {
+        if (mountedRef.current && !smoothModeRef.current) {
           setFlashingTileIdx(toIdx);
           spawnShockwave(p1.x, p1.y, landHex);
         }
@@ -1506,7 +1524,11 @@ export function GameBoardView({
       }
 
       if (mountedRef.current) {
+        const finalIdx = path[path.length - 1] ?? startIndex;
+        const pFinal = getTileCenter(finalIdx);
         setActivePawnAnim(null);
+        setFlashingTileIdx(finalIdx);
+        spawnShockwave(pFinal.x, pFinal.y, landHex);
         setTimeout(() => {
           if (mountedRef.current) setFlashingTileIdx(null);
         }, 320);
@@ -1534,6 +1556,7 @@ export function GameBoardView({
 
       await new Promise<void>((resolve) => {
         const tStart = performance.now();
+        let lastCommitTime = 0;
         const puffs: { x: number; y: number; opacity: number }[] = [];
 
         const tick = (now: number) => {
@@ -1547,15 +1570,25 @@ export function GameBoardView({
           // GiantAirportJetSvg mũi hướng lên (0°), cộng +90° để xoay đúng chiều vector bay
           const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
 
-          if (Math.random() < 0.55 && t < 0.92) {
+          if (!smoothModeRef.current && Math.random() < 0.55 && t < 0.92) {
             puffs.push({ x, y, opacity: 0.9 });
-            if (puffs.length > 22) puffs.shift();
+            if (puffs.length > 18) puffs.shift();
           }
           for (const pf of puffs) {
             pf.opacity = Math.max(0, pf.opacity - 0.025);
           }
 
-          if (mountedRef.current) {
+          const pawnEl = pawnElRefs.current[playerId];
+          if (pawnEl) {
+            pawnEl.style.left = `${x}px`;
+            pawnEl.style.top = `${y}px`;
+            pawnEl.style.zIndex = '45';
+            pawnEl.style.transform = `translate(-50%, -56%) translateY(${-Math.sin(t * Math.PI) * 32}px) scale(0.55, 0.55)`;
+          }
+
+          const minStepMs = smoothModeRef.current ? 32 : 0;
+          if (mountedRef.current && (t >= 1 || now - lastCommitTime >= minStepMs)) {
+            lastCommitTime = now;
             setAirportFlight({
               startX: p0.x,
               startY: p0.y,
@@ -1570,15 +1603,6 @@ export function GameBoardView({
               playerName,
               destinationName,
               puffs: puffs.map((pf) => ({ ...pf })),
-            });
-            setActivePawnAnim({
-              playerId,
-              x,
-              y,
-              liftY: -Math.sin(t * Math.PI) * 32,
-              scaleX: 0.55,
-              scaleY: 0.55,
-              tiltDeg: 0,
             });
           }
 
@@ -1620,7 +1644,13 @@ export function GameBoardView({
           const x = p0.x + (p1.x - p0.x) * ease;
           const y = p0.y + (p1.y - p0.y) * ease;
           const liftY = -Math.sin(t * Math.PI) * 46;
-          if (mountedRef.current) {
+          const pawnEl = pawnElRefs.current[playerId];
+          if (pawnEl) {
+            pawnEl.style.left = `${x}px`;
+            pawnEl.style.top = `${y}px`;
+            pawnEl.style.zIndex = '45';
+            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${(1 - t) * 20}deg)`;
+          } else if (mountedRef.current) {
             setActivePawnAnim({ playerId, x, y, liftY, scaleX: 1, scaleY: 1, tiltDeg: (1 - t) * 20 });
           }
           if (t < 1 && mountedRef.current) requestAnimationFrame(tick);
@@ -3209,6 +3239,9 @@ export function GameBoardView({
           return (
             <div
               key={p.id}
+              ref={(el) => {
+                pawnElRefs.current[p.id] = el;
+              }}
               style={{
                 left: x,
                 top: y,

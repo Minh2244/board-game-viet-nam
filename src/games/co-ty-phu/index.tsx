@@ -711,9 +711,9 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
         className="pointer-events-none absolute inset-0 bg-gradient-to-br from-stone-950/65 via-emerald-950/55 to-stone-950/75"
       />
 
-      <div className="relative z-10 flex min-h-full w-full flex-col items-stretch justify-between gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:flex-row lg:items-start lg:gap-4">
+      <div className="relative z-10 flex h-full w-full flex-row items-start justify-between gap-4 px-5 py-3.5">
         {/* Nút Quay lại chọn chế độ & nút Loa */}
-        <header className="flex shrink-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-stretch">
+        <header className="flex shrink-0 flex-col items-stretch gap-2">
           <button
             type="button"
             onClick={() => {
@@ -741,14 +741,14 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           </button>
         </header>
 
-        {/* Thiết lập ván chơi Offline (Gom chung Chơi Với Máy & 1 Thiết Bị Nhiều Người) */}
-        <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
+        {/* Thiết lập ván chơi Offline 2 cột Trái – Phải trên khung ngang 1220×590 */}
+        <main className="mx-auto grid h-full w-full max-w-[1100px] flex-1 grid-cols-12 gap-4">
           {/* Cột trái: Bộ chọn Số Người (1–6) + Số Máy (0–4) + Danh sách tụ + Cài đặt */}
-          <section className="mobile-flat-shadow flex flex-col gap-3 rounded-[24px] border border-emerald-400/40 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-7">
-            <div className="border-b border-white/10 pb-3">
+          <section className="mobile-flat-shadow col-span-7 flex flex-col gap-2.5 rounded-[24px] border border-emerald-400/40 bg-stone-900/92 p-4 shadow-2xl backdrop-blur-md">
+            <div className="border-b border-white/10 pb-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h1 className="text-[22px] font-black tracking-wide text-emerald-300">
+                  <h1 className="text-xl font-black tracking-wide text-emerald-300">
                     CHƠI VỚI MÁY &amp; NHIỀU NGƯỜI
                   </h1>
                   <p className="text-xs text-stone-300">
@@ -760,7 +760,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               </div>
 
               {/* 2 BỘ NÚT TÁCH RIÊNG: SỐ NGƯỜI (1–6) & SỐ MÁY (0–4) */}
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-2.5">
+              <div className="mt-2.5 grid grid-cols-2 gap-2.5">
                 <div className="flex items-center justify-between gap-1.5 rounded-2xl border border-emerald-400/30 bg-black/40 px-3 py-1.5">
                   <span className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-emerald-300">
                     <User className="h-3.5 w-3.5" />
@@ -970,7 +970,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           </section>
 
           {/* Cột phải: Tùy chỉnh Tên tụ + Màu đất + Nhân vật Chibi */}
-          <section className="mobile-flat-shadow flex flex-col justify-between gap-2.5 rounded-[24px] border border-amber-300/35 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-5">
+          <section className="mobile-flat-shadow col-span-5 flex flex-col justify-between gap-2 rounded-[24px] border border-amber-300/35 bg-stone-900/92 p-4 shadow-2xl backdrop-blur-md">
             <div className="w-full text-center">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-amber-200">
                 <span
@@ -979,20 +979,20 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
                 />
                 Đang chỉnh: {selectedSlot.name.trim() || `Tụ ${activeSlotIdx + 1}`}
               </div>
-              <h2 className="mt-1.5 text-xl font-black text-white sm:text-2xl">{selectedChar.name}</h2>
-              <p className="text-xs text-stone-300 sm:text-[13px]">{selectedChar.tagline}</p>
+              <h2 className="mt-1 text-xl font-black text-white">{selectedChar.name}</h2>
+              <p className="text-xs text-stone-300">{selectedChar.tagline}</p>
             </div>
 
-            <div className="relative my-0.5 flex h-40 w-full items-end justify-center sm:h-44">
+            <div className="relative my-0.5 flex h-36 w-full items-end justify-center">
               <div
                 aria-hidden="true"
-                className="absolute bottom-1 h-6 w-32 rounded-full blur-md"
+                className="smooth-hide-blur absolute bottom-1 h-6 w-32 rounded-full blur-md"
                 style={{ backgroundColor: selectedLandColor.hex, opacity: 0.55 }}
               />
               <img
                 src={selectedChar.standeeUrl}
                 alt={selectedChar.name}
-                className="relative h-40 w-auto object-contain drop-shadow-[0_10px_18px_rgba(0,0,0,0.55)] sm:h-44"
+                className="relative h-36 w-auto object-contain drop-shadow-[0_10px_18px_rgba(0,0,0,0.55)]"
               />
             </div>
 

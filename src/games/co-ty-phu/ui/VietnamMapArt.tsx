@@ -57,10 +57,10 @@ export const VietnamMapArt = memo(function VietnamMapArt() {
         </g>
       </svg>
 
-      {/* Hoa văn Trống Đồng Đông Sơn xoay chậm sắc nét */}
+      {/* Hoa văn Trống Đồng Đông Sơn xoay chậm sắc nét (tự đứng tĩnh trên ĐT để tiết kiệm 100% GPU) */}
       <svg
         viewBox="0 0 520 520"
-        className="absolute h-[290px] w-[290px] animate-[spin_105s_linear_infinite] opacity-[0.23] sm:h-[385px] sm:w-[385px] lg:h-[435px] lg:w-[435px]"
+        className="drum-spin-slow absolute h-[395px] w-[395px] animate-[spin_105s_linear_infinite] opacity-[0.23]"
       >
         <circle cx="260" cy="260" r="244" fill="none" stroke="#FDE68A" strokeWidth="2.4" strokeDasharray="12 6" />
         <circle cx="260" cy="260" r="224" fill="none" stroke="#FEF08A" strokeWidth="1.5" />

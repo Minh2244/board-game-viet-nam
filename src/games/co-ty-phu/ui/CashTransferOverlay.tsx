@@ -189,15 +189,6 @@ export function CashTransferOverlay({ transfers }: { transfers: readonly ActiveC
     <div className="pointer-events-none absolute inset-0 z-[60] overflow-hidden" data-testid="cash-transfer-overlay">
       {/* Đường dẫn sáng êm dịu nối Nhân Vật Trái ↔ Ngân Hàng / Chủ Đất Phải */}
       <svg className="absolute inset-0 h-full w-full overflow-visible">
-        <defs>
-          <filter id="cashArcGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
         {transfers.map((tr) => {
           const arcOpacity =
             tr.progress < 0.14
@@ -220,7 +211,6 @@ export function CashTransferOverlay({ transfers }: { transfers: readonly ActiveC
                 strokeWidth="5.5"
                 strokeLinecap="round"
                 opacity="0.22"
-                filter="url(#cashArcGlow)"
               />
               <path
                 d={d}
