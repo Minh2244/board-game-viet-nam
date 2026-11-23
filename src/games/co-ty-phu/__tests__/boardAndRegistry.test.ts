@@ -69,21 +69,22 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
     expect(expensiveProps.length).toBeLessThanOrEqual(MAX_EXPENSIVE_PROPERTY_COUNT);
     expect(expensiveProps.length).toBe(6);
 
-    // Cạnh dưới đầu tiên (edge 0) không có ô đất đắt; 3 cạnh Trái/Trên/Phải mỗi cạnh xen kẽ đúng 2 ô đất đắt, không kề nhau
-    expect(expensiveProps.filter((t) => t.edge === 0)).toHaveLength(0);
-    for (const edge of [1, 2, 3] as const) {
-      expect(expensiveProps.filter((t) => t.edge === edge)).toHaveLength(2);
+    // Mọi ô đất cùng Nhóm Màu (1..12) phải đứng liền thành 1 cụm liên tục trong danh sách ô đất (không bị nhóm màu khác xen vào giữa!)
+    const seenFinishedGroups = new Set<number>();
+    let currentGroup: number | undefined;
+    for (const prop of properties) {
+      if (prop.colorGroup !== currentGroup) {
+        if (currentGroup !== undefined) {
+          seenFinishedGroups.add(currentGroup);
+        }
+        expect(
+          seenFinishedGroups.has(prop.colorGroup!),
+          `Nhóm màu ${prop.colorGroup} bị xé lẻ xa nhau tại ô ${prop.index} (${prop.name})`,
+        ).toBe(false);
+        currentGroup = prop.colorGroup;
+      }
     }
-    for (let i = 0; i < 52; i += 1) {
-      const a = DEFAULT_BOARD_TILES[i];
-      const b = DEFAULT_BOARD_TILES[(i + 1) % 52];
-      const bothExpensive =
-        a.kind === 'PROPERTY' &&
-        b.kind === 'PROPERTY' &&
-        (a.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD &&
-        (b.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD;
-      expect(bothExpensive).toBe(false);
-    }
+    expect(seenFinishedGroups.size + 1).toBe(12);
   });
 
   it('Cả 4 cạnh bàn cờ 17x11 phân bố đối xứng 10-7-10-7 ô đất với đúng 1 Bến Xe Đấu Giá mỗi cạnh', () => {

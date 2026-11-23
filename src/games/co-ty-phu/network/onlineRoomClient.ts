@@ -312,6 +312,7 @@ export class OnlineRoomClient {
   private localName: string;
   private joinResolved = false;
   private visibilityHandler: (() => void) | null = null;
+  private pushChain: Promise<void> = Promise.resolve();
 
   constructor(options: {
     roomCode: string;
@@ -513,10 +514,10 @@ export class OnlineRoomClient {
   }
 
   private getAdaptivePollIntervalMs(): number {
-    if (!this.joinResolved) return 420; // Đang chờ duyệt vào phòng -> poll cực nhanh < 0.5s
-    if (typeof document !== 'undefined' && document.hidden) return 4800; // Ẩn tab -> tiết kiệm quota Redis tối đa
-    if (this.snapshot?.phase === 'PLAYING') return 1100; // Đang trong ván -> phản hồi nhanh ~1s
-    return 1900; // Đang ở sảnh phòng chờ -> nhẹ nhàng ~1.9s
+    if (!this.joinResolved) return 300; // Đang chờ duyệt vào phòng -> poll cực nhanh 0.3s
+    if (typeof document !== 'undefined' && document.hidden) return 3600; // Ẩn tab -> tiết kiệm quota Redis
+    if (this.snapshot?.phase === 'PLAYING') return 350; // Đang trong ván -> đồng bộ realtime ~0.35s (độ trễ TB < 0.18s!)
+    return 650; // Đang ở sảnh phòng chờ -> phản hồi đổi nhân vật/màu đất ~0.65s
   }
 
   private startSyncLoops(): void {
@@ -804,6 +805,8 @@ export class OnlineRoomClient {
           oldest.forEach((id) => this.seenActionIds.delete(id));
         }
 
+        // Lưu ngầm snapshot mới nhất để an toàn khi F5, nhưng KHÔNG gọi emitSnapshot() trước onRemoteAction
+        // để tránh nhảy cóc trạng thái bàn cờ trước khi hoạt ảnh tung xúc xắc & bước nhảy bắt đầu!
         if (this.snapshot) {
           this.snapshot = {
             ...this.snapshot,
@@ -812,7 +815,6 @@ export class OnlineRoomClient {
             matchVersion: Math.max(this.snapshot.matchVersion, packet.matchVersion),
             updatedAt: Date.now(),
           };
-          this.emitSnapshot();
         }
 
         this.callbacks.onRemoteAction({
@@ -1148,18 +1150,26 @@ export class OnlineRoomClient {
   private pushPacket(packet: WirePacket, snapshotToStore?: OnlineRoomSnapshot): void {
     if (this.destroyed) return;
     this.seenMsgIds.add(packet.msgId);
-    void apiPostRoom({
-      action: 'push',
-      game: GAME_NAMESPACE,
-      roomCode: this.roomCode,
-      senderToken: this.playerToken,
-      packet,
-      snapshot: snapshotToStore,
-      phase: snapshotToStore?.phase,
-    })
-      .then(({ data }) => {
+
+    // Xếp hàng FIFO tuần tự mọi gói tin đẩy lên server để KHÔNG BAO GIỜ bị đảo thứ tự hay đè gói tin khi 2 thao tác diễn ra sát nhau!
+    const snapshotClone = snapshotToStore ? structuredClone(snapshotToStore) : undefined;
+    this.pushChain = this.pushChain
+      .then(async () => {
+        if (this.destroyed) return;
+        const { data } = await apiPostRoom({
+          action: 'push',
+          game: GAME_NAMESPACE,
+          roomCode: this.roomCode,
+          senderToken: this.playerToken,
+          packet,
+          snapshot: snapshotClone,
+          phase: snapshotClone?.phase,
+        });
         if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
           this.lastSeq = data.seq;
+        }
+        if (!this.destroyed) {
+          this.scheduleNextPoll(100);
         }
       })
       .catch(() => {

@@ -611,15 +611,15 @@ const BoardTileCell = memo(function BoardTileCell({
           ? 'pr-[44px] pl-[9px] py-0.5'
           : 'pl-[44px] pr-[9px] py-0.5';
 
-  // Dải mỏng màu nhóm đất ở cạnh ngoài CHỈ dùng cho Ô Đất Địa Danh (PROPERTY) — KHÔNG gắn lên Thủy Điện / Bến Xe / Thuế
+  // Dải màu nhóm đất dày rõ nét ở cạnh ngoài CHỈ dùng cho Ô Đất Địa Danh (PROPERTY) — giúp nhìn thấy ngay cụm 3 ô cùng màu đứng cạnh nhau!
   const outerGroupStripClass =
     tile.edge === 0
-      ? 'bottom-0 inset-x-0 h-[4px]'
+      ? 'bottom-0 inset-x-0 h-[7px] border-t border-white/55'
       : tile.edge === 2
-        ? 'top-0 inset-x-0 h-[4px]'
+        ? 'top-0 inset-x-0 h-[7px] border-b border-white/55'
         : tile.edge === 1
-          ? 'left-0 inset-y-0 w-[4px]'
-          : 'right-0 inset-y-0 w-[4px]';
+          ? 'left-0 inset-y-0 w-[7px] border-r border-white/55'
+          : 'right-0 inset-y-0 w-[7px] border-l border-white/55';
 
   return (
     <button
@@ -641,7 +641,9 @@ const BoardTileCell = memo(function BoardTileCell({
                 ? owner.landHex
                 : activeAuctionLeader
                   ? '#FDE047'
-                  : 'rgba(15, 23, 42, 0.9)',
+                  : tile.kind === 'PROPERTY'
+                    ? groupHexColor
+                    : 'rgba(15, 23, 42, 0.9)',
       }}
       className={`retro-tile-sheen relative flex flex-col items-center justify-end overflow-hidden rounded-[6px] border text-center text-white shadow-sm transition hover:brightness-115 cursor-pointer ${contentPadding} ${
         isFlashing
@@ -655,7 +657,7 @@ const BoardTileCell = memo(function BoardTileCell({
                 : ''
       }`}
     >
-      {/* Ảnh chụp thật thắng cảnh riêng từng địa danh + chỉ hiện dải màu nhóm đất cho ô PROPERTY */}
+      {/* Ảnh chụp thật thắng cảnh riêng từng địa danh + phủ sắc độ nhóm màu rõ nét cho ô PROPERTY */}
       {landmarkUrl && (
         <>
           <img
@@ -669,7 +671,9 @@ const BoardTileCell = memo(function BoardTileCell({
             className="pointer-events-none absolute inset-0"
             style={{
               background:
-                'linear-gradient(180deg, rgba(2,6,23,0.22) 0%, rgba(2,6,23,0.44) 48%, rgba(2,6,23,0.72) 100%)',
+                tile.kind === 'PROPERTY'
+                  ? `linear-gradient(180deg, rgba(2,6,23,0.18) 0%, rgba(2,6,23,0.46) 44%, ${groupHexColor}D9 100%)`
+                  : 'linear-gradient(180deg, rgba(2,6,23,0.22) 0%, rgba(2,6,23,0.44) 48%, rgba(2,6,23,0.72) 100%)',
             }}
           />
           {tile.kind === 'PROPERTY' && (
@@ -906,6 +910,7 @@ export function GameBoardView({
   const [newlyBuiltTileIdx, setNewlyBuiltTileIdx] = useState<number | null>(null);
   const [botThought, setBotThought] = useState<BotThoughtStatus | null>(null);
   const [activePawnAnim, setActivePawnAnim] = useState<ActivePawnAnim | null>(null);
+  const livePawnOverrideRef = useRef<ActivePawnAnim | null>(null);
   const [airportFlight, setAirportFlight] = useState<AirportFlightState | null>(null);
   const [flyingCard, setFlyingCard] = useState<FlyingCardState | null>(null);
   const [jailSlam, setJailSlam] = useState<JailSlamState | null>(null);
@@ -1497,6 +1502,17 @@ export function GameBoardView({
               scaleY = 1 - 0.2 * l;
             }
 
+            const currentAnim: ActivePawnAnim = {
+              playerId,
+              x,
+              y,
+              liftY,
+              scaleX,
+              scaleY,
+              tiltDeg,
+            };
+            livePawnOverrideRef.current = currentAnim;
+
             const pawnEl = pawnElRefs.current[playerId];
             if (pawnEl) {
               pawnEl.style.left = `${x}px`;
@@ -1504,7 +1520,7 @@ export function GameBoardView({
               pawnEl.style.zIndex = '45';
               pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
             } else if (mountedRef.current) {
-              setActivePawnAnim({ playerId, x, y, liftY, scaleX, scaleY, tiltDeg });
+              setActivePawnAnim(currentAnim);
             }
 
             if (t < 1 && mountedRef.current) {
@@ -1523,6 +1539,7 @@ export function GameBoardView({
         fromIdx = toIdx;
       }
 
+      livePawnOverrideRef.current = null;
       if (mountedRef.current) {
         const finalIdx = path[path.length - 1] ?? startIndex;
         const pFinal = getTileCenter(finalIdx);
@@ -1578,12 +1595,22 @@ export function GameBoardView({
             pf.opacity = Math.max(0, pf.opacity - 0.025);
           }
 
+          const liftY = -Math.sin(t * Math.PI) * 32;
+          livePawnOverrideRef.current = {
+            playerId,
+            x,
+            y,
+            liftY,
+            scaleX: 0.55,
+            scaleY: 0.55,
+            tiltDeg: 0,
+          };
           const pawnEl = pawnElRefs.current[playerId];
           if (pawnEl) {
             pawnEl.style.left = `${x}px`;
             pawnEl.style.top = `${y}px`;
             pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate(-50%, -56%) translateY(${-Math.sin(t * Math.PI) * 32}px) scale(0.55, 0.55)`;
+            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) scale(0.55, 0.55)`;
           }
 
           const minStepMs = smoothModeRef.current ? 32 : 0;
@@ -1615,6 +1642,7 @@ export function GameBoardView({
         requestAnimationFrame(tick);
       });
 
+      livePawnOverrideRef.current = null;
       if (mountedRef.current) {
         setAirportFlight(null);
         setActivePawnAnim(null);
@@ -1644,14 +1672,24 @@ export function GameBoardView({
           const x = p0.x + (p1.x - p0.x) * ease;
           const y = p0.y + (p1.y - p0.y) * ease;
           const liftY = -Math.sin(t * Math.PI) * 46;
+          const tiltDeg = (1 - t) * 20;
+          livePawnOverrideRef.current = {
+            playerId,
+            x,
+            y,
+            liftY,
+            scaleX: 1,
+            scaleY: 1,
+            tiltDeg,
+          };
           const pawnEl = pawnElRefs.current[playerId];
           if (pawnEl) {
             pawnEl.style.left = `${x}px`;
             pawnEl.style.top = `${y}px`;
             pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${(1 - t) * 20}deg)`;
+            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${tiltDeg}deg)`;
           } else if (mountedRef.current) {
-            setActivePawnAnim({ playerId, x, y, liftY, scaleX: 1, scaleY: 1, tiltDeg: (1 - t) * 20 });
+            setActivePawnAnim(livePawnOverrideRef.current);
           }
           if (t < 1 && mountedRef.current) requestAnimationFrame(tick);
           else resolve();
@@ -1659,6 +1697,7 @@ export function GameBoardView({
         requestAnimationFrame(tick);
       });
 
+      livePawnOverrideRef.current = null;
       if (mountedRef.current) {
         setActivePawnAnim(null);
         triggerBoardShake();
@@ -2085,13 +2124,14 @@ export function GameBoardView({
         text: displayState.phase === 'WAIT_ROLL' ? '🎲 Đang lắc xúc xắc...' : '⏳ Đang xử lý...',
         tone: 'thinking',
       });
+      const rollDelayMs = onlineContext ? 380 : 780;
       const timer = setTimeout(() => {
         const botAction = computeBotAction(latestStateRef.current);
         if (botAction) {
           const botPower = 0.45 + cryptoRandomInt(0, 45) / 100;
           void dispatchAction(botAction, botPower);
         }
-      }, 780);
+      }, rollDelayMs);
       return () => clearTimeout(timer);
     }
 
@@ -2119,7 +2159,8 @@ export function GameBoardView({
       tone: 'thinking',
     });
 
-    const thinkMs = cryptoRandomInt(1500, 2300);
+    const thinkMs = onlineContext ? 680 : cryptoRandomInt(1500, 2300);
+    const commitDelayMs = onlineContext ? 280 : 700;
     let commitTimer: ReturnType<typeof setTimeout> | null = null;
 
     const decideTimer = setTimeout(() => {
@@ -2142,7 +2183,7 @@ export function GameBoardView({
       commitTimer = setTimeout(() => {
         setFlashingTileIdx(null);
         void dispatchAction(botAction);
-      }, 700);
+      }, commitDelayMs);
     }, thinkMs);
 
     return () => {
@@ -3189,7 +3230,13 @@ export function GameBoardView({
           const charInfo =
             CO_TY_PHU_CHARACTERS.find((c) => c.id === p.characterId) ?? CO_TY_PHU_CHARACTERS[0];
           const isTurn = p.id === currentPlayer.id && displayState.phase !== 'GAME_OVER';
-          const isMoving = activePawnAnim?.playerId === p.id;
+          const activeAnim =
+            livePawnOverrideRef.current?.playerId === p.id
+              ? livePawnOverrideRef.current
+              : activePawnAnim?.playerId === p.id
+                ? activePawnAnim
+                : null;
+          const isMoving = Boolean(activeAnim);
           const standingTile = displayState.tiles[p.position];
           const isSideStanding = !isMoving && (standingTile?.edge === 1 || standingTile?.edge === 3);
 
@@ -3200,13 +3247,13 @@ export function GameBoardView({
           let scaleY = 1;
           let tiltDeg = 0;
 
-          if (isMoving && activePawnAnim) {
-            x = activePawnAnim.x;
-            y = activePawnAnim.y;
-            liftY = activePawnAnim.liftY;
-            scaleX = activePawnAnim.scaleX;
-            scaleY = activePawnAnim.scaleY;
-            tiltDeg = activePawnAnim.tiltDeg;
+          if (isMoving && activeAnim) {
+            x = activeAnim.x;
+            y = activeAnim.y;
+            liftY = activeAnim.liftY;
+            scaleX = activeAnim.scaleX;
+            scaleY = activeAnim.scaleY;
+            tiltDeg = activeAnim.tiltDeg;
           } else {
             const rect = tileRects[p.position];
             if (!rect) return null;

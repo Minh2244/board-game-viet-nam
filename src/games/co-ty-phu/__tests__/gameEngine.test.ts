@@ -83,11 +83,11 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
       Math.round(rentTestState.tiles[10].basePrice! * 0.25) * 2,
     );
 
-    // Kiểm tra sự kiện MONOPOLY_COMPLETED khi mua nốt ô cuối nhóm Đông Bắc Bộ (Cao Bằng ô 25 + Lạng Sơn ô 47)
+    // Kiểm tra sự kiện MONOPOLY_COMPLETED khi mua nốt ô cuối nhóm Đông Bắc Bộ (Cao Bằng ô 27 + Lạng Sơn ô 28 đứng liền kề nhau!)
     let monoState = createInitialGameState(makeSetup(2, 1));
-    monoState.tiles[25].ownerId = monoState.players[0].id;
-    monoState.players[0].position = 45;
-    monoState = reduceGameAction(monoState, { type: 'ROLL_DICE', diceValues: [2] }).state; // dừng tại ô 47 (Lạng Sơn)
+    monoState.tiles[27].ownerId = monoState.players[0].id;
+    monoState.players[0].position = 26;
+    monoState = reduceGameAction(monoState, { type: 'ROLL_DICE', diceValues: [2] }).state; // dừng tại ô 28 (Lạng Sơn)
     expect(monoState.phase).toBe('BUY_OR_SKIP_DECISION');
     const monoRes = reduceGameAction(monoState, { type: 'BUY_PROPERTY', buy: true });
     expect(
@@ -96,26 +96,24 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
       ),
     ).toBe(true);
 
-    // Kể cả ở Bản đồ Ngẫu nhiên: giá tối đa 6 Tr, đúng 6 ô đắt rải đều 2 ô mỗi cạnh Trái/Trên/Phải, cạnh dưới 0 ô đắt & không 2 ô đắt kề nhau
+    // Kể cả ở Bản đồ Ngẫu nhiên: mọi nhóm màu đều giữ nguyên cụm liền nhau (không bao giờ trộn lẫn nhóm màu khác vào giữa!)
     const props = tiles.filter((t) => t.kind === 'PROPERTY');
     expect(props).toHaveLength(34);
     expect(props.every((t) => (t.basePrice ?? 0) <= MAX_PROPERTY_PRICE)).toBe(true);
     const expProps = props.filter((t) => (t.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD);
     expect(expProps.length).toBeLessThanOrEqual(MAX_EXPENSIVE_PROPERTY_COUNT);
     expect(expProps.filter((t) => t.edge === 0)).toHaveLength(0);
-    for (const edge of [1, 2, 3] as const) {
-      expect(expProps.filter((t) => t.edge === edge)).toHaveLength(2);
+
+    const finishedRandomGroups = new Set<number>();
+    let curRandGroup: number | undefined;
+    for (const p of props) {
+      if (p.colorGroup !== curRandGroup) {
+        if (curRandGroup !== undefined) finishedRandomGroups.add(curRandGroup);
+        expect(finishedRandomGroups.has(p.colorGroup!)).toBe(false);
+        curRandGroup = p.colorGroup;
+      }
     }
-    for (let i = 0; i < 52; i += 1) {
-      const a = tiles[i];
-      const b = tiles[(i + 1) % 52];
-      const bothExp =
-        a.kind === 'PROPERTY' &&
-        b.kind === 'PROPERTY' &&
-        (a.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD &&
-        (b.basePrice ?? 0) >= EXPENSIVE_PROPERTY_THRESHOLD;
-      expect(bothExp).toBe(false);
-    }
+    expect(finishedRandomGroups.size + 1).toBe(12);
 
     const airports = tiles.filter((t) => t.kind === 'AIRPORT');
     expect(airports).toHaveLength(1);

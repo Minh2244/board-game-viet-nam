@@ -25,8 +25,9 @@ export interface StoredRoomDocument {
 const LOBBY_TTL_SEC = 15 * 60; // 15 phút không hoạt động ở sảnh chờ mới tự dọn
 const PLAYING_TTL_SEC = 30 * 60; // 30 phút cả bàn bỏ ngang mới tự dọn (đang chơi heartbeat gia hạn liên tục)
 const DISSOLVED_TTL_SEC = 60; // Giữ 60s để mọi máy nhận thông báo giải tán phòng
-const MAX_EVENTS_KEPT = 80;
+const MAX_EVENTS_KEPT = 60;
 const HB_FIELD_PREFIX = 'hb:';
+const EV_FIELD_PREFIX = 'ev:';
 
 let cachedRedis: Redis | null | undefined;
 
@@ -43,10 +44,10 @@ function getUpstashRedis(): Redis | null {
 }
 
 // Bộ nhớ tạm cho môi trường local dev/preview (khi chưa cấu hình biến môi trường Upstash)
-// Tách riêng heartbeats để hành vi giống hệt Redis Hash field `hb:*` — không bao giờ ghi đè `doc`!
 interface MemoryEntry {
   doc: StoredRoomDocument;
   heartbeats: Record<string, number>;
+  eventsBySeq: Map<number, RoomEventRecord>;
   expiresAt: number;
 }
 const memoryRooms = new Map<string, MemoryEntry>();
@@ -93,6 +94,29 @@ function parseHeartbeatsFromHash(raw: Record<string, unknown> | null): Record<st
   return out;
 }
 
+function parseEventsFromHash(raw: Record<string, unknown> | null): RoomEventRecord[] {
+  const list: RoomEventRecord[] = [];
+  if (!raw) return list;
+  for (const [field, val] of Object.entries(raw)) {
+    if (!field.startsWith(EV_FIELD_PREFIX)) continue;
+    let ev: RoomEventRecord | null = null;
+    if (typeof val === 'string') {
+      try {
+        ev = JSON.parse(val) as RoomEventRecord;
+      } catch {
+        ev = null;
+      }
+    } else if (val && typeof val === 'object') {
+      ev = val as RoomEventRecord;
+    }
+    if (ev && typeof ev.seq === 'number') {
+      list.push(ev);
+    }
+  }
+  list.sort((a, b) => a.seq - b.seq);
+  return list;
+}
+
 function extractMatchVersion(snapshot: Record<string, unknown> | null): number {
   if (!snapshot) return 0;
   const v = Number(snapshot.matchVersion);
@@ -134,51 +158,116 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
       doc = all.data as StoredRoomDocument;
     }
     if (!doc) return null;
+
+    const latestSeq = Number(all.seq);
+    if (Number.isFinite(latestSeq) && latestSeq > doc.seq) {
+      doc.seq = latestSeq;
+    }
+    if (all.phase === 'LOBBY' || all.phase === 'PLAYING' || all.phase === 'DISSOLVED') {
+      doc.phase = all.phase;
+    }
+
+    // Hợp nhất các field `hb:<token>` và `ev:<seq>` độc lập (loại bỏ 100% mất sự kiện khi 2 máy đẩy cùng lúc!)
     const separateHbs = parseHeartbeatsFromHash(all);
     doc.heartbeats = { ...(doc.heartbeats || {}), ...separateHbs };
+
+    const hashEvents = parseEventsFromHash(all);
+    if (hashEvents.length > 0) {
+      const bySeq = new Map<number, RoomEventRecord>();
+      for (const e of doc.events || []) bySeq.set(e.seq, e);
+      for (const e of hashEvents) bySeq.set(e.seq, e);
+      doc.events = Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq).slice(-MAX_EVENTS_KEPT);
+    }
     return doc;
   }
+
   cleanExpiredMemory();
   const entry = memoryRooms.get(key);
   if (!entry) return null;
   const cloned = structuredClone(entry.doc);
   cloned.heartbeats = { ...cloned.heartbeats, ...entry.heartbeats };
+  cloned.events = Array.from(entry.eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
   return cloned;
 }
 
-async function writeRoomDoc(
+/**
+ * Cấp số thứ tự `seq` nguyên tử bằng HINCRBY và lưu sự kiện vào field riêng `ev:<seq>`.
+ * Đảm bảo 100% không bao giờ bị rơi mất gói tin `ROLL_DICE` / `BUY_PROPERTY` dù 2 máy gửi cùng mili-giây!
+ */
+async function commitRoomUpdateAtomic(
   key: string,
   doc: StoredRoomDocument,
-  touchHeartbeatToken?: string,
-  now?: number,
-): Promise<void> {
+  senderToken: string,
+  now: number,
+  newPacket?: Record<string, unknown> | null,
+): Promise<number> {
   const ttl = ttlForPhase(doc.phase);
   const redis = getUpstashRedis();
   if (redis) {
+    const allocatedSeq = await redis.hincrby(key, 'seq', 1);
+    doc.seq = allocatedSeq;
+
+    const eventRecord: RoomEventRecord | null = newPacket
+      ? {
+          seq: allocatedSeq,
+          sentAt: now,
+          senderToken,
+          packet: newPacket,
+        }
+      : null;
+
+    if (eventRecord) {
+      doc.events = [...(doc.events || []), eventRecord].slice(-MAX_EVENTS_KEPT);
+    }
+
     const fields: Record<string, string> = {
-      seq: String(doc.seq),
       phase: doc.phase,
       data: JSON.stringify(doc),
+      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
     };
-    if (touchHeartbeatToken && now) {
-      fields[`${HB_FIELD_PREFIX}${touchHeartbeatToken}`] = String(now);
+    if (eventRecord) {
+      fields[`${EV_FIELD_PREFIX}${allocatedSeq}`] = JSON.stringify(eventRecord);
     }
+
     const pipe = redis.pipeline();
     pipe.hset(key, fields);
+    if (allocatedSeq > MAX_EVENTS_KEPT) {
+      pipe.hdel(key, `${EV_FIELD_PREFIX}${allocatedSeq - MAX_EVENTS_KEPT}`);
+    }
     pipe.expire(key, ttl);
     await pipe.exec();
-    return;
+    return allocatedSeq;
   }
+
   const existing = memoryRooms.get(key);
-  const heartbeats = { ...(existing?.heartbeats || {}), ...(doc.heartbeats || {}) };
-  if (touchHeartbeatToken && now) {
-    heartbeats[touchHeartbeatToken] = now;
+  const nextSeq = (existing?.doc.seq ?? doc.seq) + 1;
+  doc.seq = nextSeq;
+  const eventsBySeq = existing?.eventsBySeq ?? new Map<number, RoomEventRecord>();
+
+  if (newPacket) {
+    const ev: RoomEventRecord = {
+      seq: nextSeq,
+      sentAt: now,
+      senderToken,
+      packet: newPacket,
+    };
+    eventsBySeq.set(nextSeq, ev);
+    if (nextSeq > MAX_EVENTS_KEPT) {
+      eventsBySeq.delete(nextSeq - MAX_EVENTS_KEPT);
+    }
   }
+
+  doc.events = Array.from(eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
+  const heartbeats = { ...(existing?.heartbeats || {}), ...(doc.heartbeats || {}), [senderToken]: now };
+  doc.heartbeats = heartbeats;
+
   memoryRooms.set(key, {
     doc: structuredClone(doc),
     heartbeats,
+    eventsBySeq,
     expiresAt: Date.now() + ttl * 1000,
   });
+  return nextSeq;
 }
 
 /**
@@ -259,6 +348,7 @@ async function claimRoomKeyAtomic(key: string, initialDoc: StoredRoomDocument): 
   memoryRooms.set(key, {
     doc: structuredClone(initialDoc),
     heartbeats: { [initialDoc.hostToken]: initialDoc.createdAt },
+    eventsBySeq: new Map(),
     expiresAt: Date.now() + ttl * 1000,
   });
   return true;
@@ -488,19 +578,11 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       if (doc.snapshot) {
         doc.snapshot = { ...doc.snapshot, updatedAt: now };
       }
-      doc.seq += 1;
-      if (payload.packet && typeof payload.packet === 'object') {
-        doc.events.push({
-          seq: doc.seq,
-          sentAt: now,
-          senderToken,
-          packet: payload.packet as Record<string, unknown>,
-        });
-      }
-      if (doc.events.length > MAX_EVENTS_KEPT) {
-        doc.events = doc.events.slice(-MAX_EVENTS_KEPT);
-      }
-      await writeRoomDoc(key, doc, senderToken, now);
+      const pkt =
+        payload.packet && typeof payload.packet === 'object'
+          ? (payload.packet as Record<string, unknown>)
+          : null;
+      await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
       return {
         status: 200,
         body: {
@@ -542,15 +624,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       payload.packet && typeof payload.packet === 'object'
         ? (payload.packet as Record<string, unknown>)
         : null;
-    if (packet) {
-      doc.seq += 1;
-      doc.events.push({ seq: doc.seq, sentAt: now, senderToken, packet });
-      if (doc.events.length > MAX_EVENTS_KEPT) {
-        doc.events = doc.events.slice(-MAX_EVENTS_KEPT);
-      }
-    }
-
-    await writeRoomDoc(key, doc, senderToken, now);
+    await commitRoomUpdateAtomic(key, doc, senderToken, now, packet);
     return {
       status: 200,
       body: {
@@ -569,7 +643,6 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
   if (action === 'push') {
     doc.heartbeats[senderToken] = now;
     doc.updatedAt = now;
-    doc.seq += 1;
 
     const isHost = senderToken === doc.hostToken;
     const isPlayingMember = doc.phase === 'PLAYING' && isMemberToken(doc, senderToken);
@@ -596,19 +669,11 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       doc.phase = payload.phase;
     }
 
-    if (payload.packet && typeof payload.packet === 'object') {
-      doc.events.push({
-        seq: doc.seq,
-        sentAt: now,
-        senderToken,
-        packet: payload.packet as Record<string, unknown>,
-      });
-      if (doc.events.length > MAX_EVENTS_KEPT) {
-        doc.events = doc.events.slice(-MAX_EVENTS_KEPT);
-      }
-    }
-
-    await writeRoomDoc(key, doc, senderToken, now);
+    const pkt =
+      payload.packet && typeof payload.packet === 'object'
+        ? (payload.packet as Record<string, unknown>)
+        : null;
+    await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
     return {
       status: 200,
       body: {
@@ -634,16 +699,11 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
 
     doc.phase = 'DISSOLVED';
     doc.updatedAt = now;
-    doc.seq += 1;
-    if (payload.packet && typeof payload.packet === 'object') {
-      doc.events.push({
-        seq: doc.seq,
-        sentAt: now,
-        senderToken,
-        packet: payload.packet as Record<string, unknown>,
-      });
-    }
-    await writeRoomDoc(key, doc, senderToken, now);
+    const pkt =
+      payload.packet && typeof payload.packet === 'object'
+        ? (payload.packet as Record<string, unknown>)
+        : null;
+    await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
     return {
       status: 200,
       body: { ok: true, seq: doc.seq, phase: doc.phase },
