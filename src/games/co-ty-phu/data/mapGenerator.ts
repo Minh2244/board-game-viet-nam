@@ -23,9 +23,9 @@ export function generateBoardTiles(mapMode: 'default' | 'random'): BoardTile[] {
     const original3Groups = COLOR_GROUP_3_CLUSTERS.map((cluster) =>
       cryptoShuffle(cluster.map((idx) => defs[idx])),
     );
-    // Giữ 2 nhóm khởi điểm (Nhóm 1 & Nhóm 2) ở 2 cụm đầu cạnh dưới để đầu ván dễ thở; 8 nhóm 3 ô còn lại hoán đổi vị trí cụm ngẫu nhiên
-    const starter3Groups = cryptoShuffle(original3Groups.slice(0, 2));
-    const upper3Groups = cryptoShuffle(original3Groups.slice(2));
+    // Giữ 3 cụm có ô thuộc cạnh dưới (Nhóm 1, Nhóm 2, Nhóm 3) ở 3 cụm khởi điểm đầu bàn để cạnh dưới luôn nhẹ nhàng (0 ô đắt >= 5M); 7 nhóm 3 ô còn lại hoán đổi ngẫu nhiên
+    const starter3Groups = cryptoShuffle(original3Groups.slice(0, 3));
+    const upper3Groups = cryptoShuffle(original3Groups.slice(3));
     const arranged3Groups = [...starter3Groups, ...upper3Groups];
 
     for (let cIdx = 0; cIdx < COLOR_GROUP_3_CLUSTERS.length; cIdx += 1) {

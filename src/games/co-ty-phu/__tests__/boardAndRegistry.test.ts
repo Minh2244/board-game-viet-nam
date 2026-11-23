@@ -15,7 +15,7 @@ import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from '@/games/co-ty-phu/data/charac
 import { getLandmarkArtworkUrl } from '@/games/co-ty-phu/data/landmarkArtwork';
 
 describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
-  it('Khai báo đúng 5 tựa game với duy nhất co-ty-phu READY ở giai đoạn đầu', () => {
+  it('Khai báo đúng 5 tựa game với co-ty-phu và o-an-quan READY, 3 game còn lại COMING_SOON', () => {
     expect(GAME_CATALOG.map((g) => g.id)).toEqual([
       'co-ty-phu',
       'co-ca-ngua',
@@ -24,12 +24,11 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
       'o-an-quan',
     ]);
     const ready = GAME_CATALOG.filter((g) => g.status === 'READY');
-    expect(ready).toHaveLength(1);
-    expect(ready[0].id).toBe('co-ty-phu');
-    expect(typeof ready[0].loader).toBe('function');
+    expect(ready.map((g) => g.id)).toEqual(['co-ty-phu', 'o-an-quan']);
+    expect(ready.every((g) => typeof g.loader === 'function')).toBe(true);
 
     const upcoming = GAME_CATALOG.filter((g) => g.status === 'COMING_SOON');
-    expect(upcoming).toHaveLength(4);
+    expect(upcoming).toHaveLength(3);
     expect(upcoming.every((g) => g.loader === undefined)).toBe(true);
   });
 
