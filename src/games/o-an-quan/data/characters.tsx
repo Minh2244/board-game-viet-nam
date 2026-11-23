@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { CharacterId } from '../engine/types';
 
 export type CharacterMood = 'idle' | 'thinking' | 'happy' | 'excited' | 'worried';
@@ -46,6 +47,8 @@ export function OAnQuanCharacterArt({
   facing?: 'left' | 'right';
   className?: string;
 }) {
+  const rawUid = useId();
+  const uid = rawUid.replace(/[^a-zA-Z0-9_-]/g, '');
   const isBoy = characterId === 'cu_ti';
   const flipCls = facing === 'left' ? '-scale-x-100' : '';
 
@@ -123,6 +126,10 @@ export function OAnQuanCharacterArt({
   };
 
   if (isBoy) {
+    const skinId = `cutiSkin_${uid}`;
+    const hairId = `cutiHair_${uid}`;
+    const shirtId = `cutiShirt_${uid}`;
+    const scarfId = `khanRan_${uid}`;
     return (
       <svg
         viewBox="0 0 160 200"
@@ -130,20 +137,21 @@ export function OAnQuanCharacterArt({
         aria-label="Cu Tí"
       >
         <defs>
-          <radialGradient id="cutiSkin" cx="45%" cy="35%" r="65%">
-            <stop offset="0%" stopColor="#FFE5C8" />
-            <stop offset="75%" stopColor="#FAD2AE" />
-            <stop offset="100%" stopColor="#EBB78B" />
-          </radialGradient>
-          <linearGradient id="cutiHair" x1="0" y1="0" x2="0" y2="1">
+          {/* Dùng linearGradient + ID duy nhất per-mount để tránh lỗi Auto Dark Mode / Skia radialGradient trên Android */}
+          <linearGradient id={skinId} x1="0.2" y1="0" x2="0.85" y2="1">
+            <stop offset="0%" stopColor="#FFE8CE" />
+            <stop offset="65%" stopColor="#FAD2AE" />
+            <stop offset="100%" stopColor="#EDBC90" />
+          </linearGradient>
+          <linearGradient id={hairId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#4A2E20" />
             <stop offset="100%" stopColor="#26150E" />
           </linearGradient>
-          <linearGradient id="cutiShirt" x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={shirtId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#8A5638" />
             <stop offset="100%" stopColor="#5C3520" />
           </linearGradient>
-          <pattern id="khanRanPattern" width="8" height="8" patternUnits="userSpaceOnUse">
+          <pattern id={scarfId} width="8" height="8" patternUnits="userSpaceOnUse">
             <rect width="8" height="8" fill="#F8FAFC" />
             <rect width="4" height="8" fill="#334155" opacity="0.78" />
             <rect width="8" height="4" fill="#1E293B" opacity="0.65" />
@@ -162,7 +170,7 @@ export function OAnQuanCharacterArt({
         {/* Thân áo bà ba nâu truyền thống */}
         <path
           d="M52 104 Q80 96 108 104 L114 162 Q80 169 46 162 Z"
-          fill="url(#cutiShirt)"
+          fill={`url(#${shirtId})`}
           stroke="#2E170B"
           strokeWidth="2.6"
           strokeLinejoin="round"
@@ -176,40 +184,41 @@ export function OAnQuanCharacterArt({
         <rect x="90" y="138" width="16" height="14" rx="3" fill="#6D4026" stroke="#3D2113" strokeWidth="1.6" />
 
         {/* Hai cánh tay */}
-        <path d="M53 108 Q36 125 40 144 Q46 149 52 142 L57 120 Z" fill="url(#cutiShirt)" stroke="#2E170B" strokeWidth="2.5" />
-        <path d="M107 108 Q124 125 120 144 Q114 149 108 142 L103 120 Z" fill="url(#cutiShirt)" stroke="#2E170B" strokeWidth="2.5" />
-        <circle cx="45" cy="146" r="7.5" fill="url(#cutiSkin)" stroke="#3D2217" strokeWidth="2" />
-        <circle cx="115" cy="146" r="7.5" fill="url(#cutiSkin)" stroke="#3D2217" strokeWidth="2" />
+        <path d="M53 108 Q36 125 40 144 Q46 149 52 142 L57 120 Z" fill={`url(#${shirtId})`} stroke="#2E170B" strokeWidth="2.5" />
+        <path d="M107 108 Q124 125 120 144 Q114 149 108 142 L103 120 Z" fill={`url(#${shirtId})`} stroke="#2E170B" strokeWidth="2.5" />
+        <circle cx="45" cy="146" r="7.5" fill="#FAD2AE" stroke="#3D2217" strokeWidth="2" />
+        <circle cx="115" cy="146" r="7.5" fill="#FAD2AE" stroke="#3D2217" strokeWidth="2" />
 
         {/* Khăn rằn quấn cổ đặc trưng Việt Nam */}
         <path
           d="M54 96 Q80 107 106 96 L109 112 Q80 123 51 112 Z"
-          fill="url(#khanRanPattern)"
+          fill={`url(#${scarfId})`}
           stroke="#1E293B"
           strokeWidth="2.4"
           strokeLinejoin="round"
         />
         <path
           d="M62 112 L58 134 L71 131 L73 114 Z"
-          fill="url(#khanRanPattern)"
+          fill={`url(#${scarfId})`}
           stroke="#1E293B"
           strokeWidth="2"
           strokeLinejoin="round"
         />
         <path
           d="M90 113 L94 132 L105 129 L101 111 Z"
-          fill="url(#khanRanPattern)"
+          fill={`url(#${scarfId})`}
           stroke="#1E293B"
           strokeWidth="2"
           strokeLinejoin="round"
         />
 
         {/* Hai tai */}
-        <circle cx="38" cy="66" r="8" fill="url(#cutiSkin)" stroke="#3D2217" strokeWidth="2.2" />
-        <circle cx="122" cy="66" r="8" fill="url(#cutiSkin)" stroke="#3D2217" strokeWidth="2.2" />
+        <circle cx="38" cy="66" r="8" fill="#FAD2AE" stroke="#3D2217" strokeWidth="2.2" />
+        <circle cx="122" cy="66" r="8" fill="#FAD2AE" stroke="#3D2217" strokeWidth="2.2" />
 
-        {/* Khuôn mặt Chibi bầu bĩnh */}
-        <ellipse cx="80" cy="62" rx="43" ry="39" fill="url(#cutiSkin)" stroke="#3D2217" strokeWidth="2.8" />
+        {/* Khuôn mặt Chibi bầu bĩnh (lớp nền da đặc + gradient bóng mềm) */}
+        <ellipse cx="80" cy="62" rx="43" ry="39" fill="#FAD2AE" />
+        <ellipse cx="80" cy="62" rx="43" ry="39" fill={`url(#${skinId})`} stroke="#3D2217" strokeWidth="2.8" />
         {/* Má hồng */}
         <ellipse cx="52" cy="72" rx="7.5" ry="4.5" fill="#FB7185" opacity="0.45" />
         <ellipse cx="108" cy="72" rx="7.5" ry="4.5" fill="#FB7185" opacity="0.45" />
@@ -217,7 +226,7 @@ export function OAnQuanCharacterArt({
         {/* Mái tóc bé trai lanh lợi */}
         <path
           d="M35 58 C34 24 62 14 82 15 C106 15 126 28 125 58 C118 46 111 40 104 42 C99 47 93 47 88 38 C79 49 69 50 61 40 C54 49 45 48 35 58 Z"
-          fill="url(#cutiHair)"
+          fill={`url(#${hairId})`}
           stroke="#1C0E08"
           strokeWidth="2.6"
           strokeLinejoin="round"
@@ -231,6 +240,9 @@ export function OAnQuanCharacterArt({
   }
 
   // Bé Mít — Áo tứ thân/bà ba hồng đào + tóc buộc hai chùm nơ đỏ
+  const skinId = `bemitSkin_${uid}`;
+  const hairId = `bemitHair_${uid}`;
+  const dressId = `bemitDress_${uid}`;
   return (
     <svg
       viewBox="0 0 160 200"
@@ -238,16 +250,16 @@ export function OAnQuanCharacterArt({
       aria-label="Bé Mít"
     >
       <defs>
-        <radialGradient id="bemitSkin" cx="45%" cy="35%" r="65%">
+        <linearGradient id={skinId} x1="0.2" y1="0" x2="0.85" y2="1">
           <stop offset="0%" stopColor="#FFECE0" />
-          <stop offset="75%" stopColor="#FAD7C0" />
+          <stop offset="65%" stopColor="#FAD7C0" />
           <stop offset="100%" stopColor="#ECC0A0" />
-        </radialGradient>
-        <linearGradient id="bemitHair" x1="0" y1="0" x2="0" y2="1">
+        </linearGradient>
+        <linearGradient id={hairId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#3B2420" />
           <stop offset="100%" stopColor="#1B0F0D" />
         </linearGradient>
-        <linearGradient id="bemitDress" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={dressId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#FDA4AF" />
           <stop offset="55%" stopColor="#FB7185" />
           <stop offset="100%" stopColor="#E11D48" />
@@ -258,8 +270,8 @@ export function OAnQuanCharacterArt({
       <ellipse cx="80" cy="190" rx="44" ry="8" fill="rgba(28, 12, 4, 0.42)" />
 
       {/* Hai búi tóc tròn hai bên + nơ hồng đỏ */}
-      <circle cx="32" cy="40" r="17" fill="url(#bemitHair)" stroke="#1B0F0D" strokeWidth="2.6" />
-      <circle cx="128" cy="40" r="17" fill="url(#bemitHair)" stroke="#1B0F0D" strokeWidth="2.6" />
+      <circle cx="32" cy="40" r="17" fill={`url(#${hairId})`} stroke="#1B0F0D" strokeWidth="2.6" />
+      <circle cx="128" cy="40" r="17" fill={`url(#${hairId})`} stroke="#1B0F0D" strokeWidth="2.6" />
       <path d="M36 47 L26 60 L38 56 Z" fill="#F43F5E" stroke="#881337" strokeWidth="1.8" />
       <path d="M124 47 L134 60 L122 56 Z" fill="#F43F5E" stroke="#881337" strokeWidth="1.8" />
       <ellipse cx="43" cy="46" rx="6" ry="9" transform="rotate(-32 43 46)" fill="#F472B6" stroke="#881337" strokeWidth="2" />
@@ -274,7 +286,7 @@ export function OAnQuanCharacterArt({
       {/* Tà áo yếm / áo bà ba đào xòe duyên dáng */}
       <path
         d="M55 102 Q80 96 105 102 L118 164 Q80 174 42 164 Z"
-        fill="url(#bemitDress)"
+        fill={`url(#${dressId})`}
         stroke="#6B1028"
         strokeWidth="2.6"
         strokeLinejoin="round"
@@ -285,15 +297,16 @@ export function OAnQuanCharacterArt({
       <path d="M80 115 L74 128 M80 115 L86 128" stroke="#FEF08A" strokeWidth="2.2" strokeLinecap="round" />
 
       {/* Hai tay áo mềm mại */}
-      <path d="M55 106 Q36 124 38 142 Q46 148 53 140 L59 120 Z" fill="url(#bemitDress)" stroke="#6B1028" strokeWidth="2.4" />
-      <path d="M105 106 Q124 124 122 142 Q114 148 107 140 L101 120 Z" fill="url(#bemitDress)" stroke="#6B1028" strokeWidth="2.4" />
-      <circle cx="43" cy="144" r="7" fill="url(#bemitSkin)" stroke="#3D2217" strokeWidth="2" />
-      <circle cx="117" cy="144" r="7" fill="url(#bemitSkin)" stroke="#3D2217" strokeWidth="2" />
+      <path d="M55 106 Q36 124 38 142 Q46 148 53 140 L59 120 Z" fill={`url(#${dressId})`} stroke="#6B1028" strokeWidth="2.4" />
+      <path d="M105 106 Q124 124 122 142 Q114 148 107 140 L101 120 Z" fill={`url(#${dressId})`} stroke="#6B1028" strokeWidth="2.4" />
+      <circle cx="43" cy="144" r="7" fill="#FAD7C0" stroke="#3D2217" strokeWidth="2" />
+      <circle cx="117" cy="144" r="7" fill="#FAD7C0" stroke="#3D2217" strokeWidth="2" />
 
       {/* Tai & Khuôn mặt bầu bĩnh */}
-      <circle cx="38" cy="66" r="7.5" fill="url(#bemitSkin)" stroke="#3D2217" strokeWidth="2.2" />
-      <circle cx="122" cy="66" r="7.5" fill="url(#bemitSkin)" stroke="#3D2217" strokeWidth="2.2" />
-      <ellipse cx="80" cy="62" rx="42" ry="38" fill="url(#bemitSkin)" stroke="#3D2217" strokeWidth="2.8" />
+      <circle cx="38" cy="66" r="7.5" fill="#FAD7C0" stroke="#3D2217" strokeWidth="2.2" />
+      <circle cx="122" cy="66" r="7.5" fill="#FAD7C0" stroke="#3D2217" strokeWidth="2.2" />
+      <ellipse cx="80" cy="62" rx="42" ry="38" fill="#FAD7C0" />
+      <ellipse cx="80" cy="62" rx="42" ry="38" fill={`url(#${skinId})`} stroke="#3D2217" strokeWidth="2.8" />
 
       {/* Má hồng đào */}
       <ellipse cx="52" cy="71" rx="8" ry="4.5" fill="#FB7185" opacity="0.52" />
@@ -302,7 +315,7 @@ export function OAnQuanCharacterArt({
       {/* Tóc mái bằng đáng yêu */}
       <path
         d="M36 60 C35 24 58 15 80 15 C102 15 125 24 124 60 C118 47 110 43 102 45 C96 47 91 40 80 41 C69 40 64 47 58 45 C50 43 42 47 36 60 Z"
-        fill="url(#bemitHair)"
+        fill={`url(#${hairId})`}
         stroke="#1B0F0D"
         strokeWidth="2.6"
         strokeLinejoin="round"
@@ -326,6 +339,9 @@ export function WovenBasketSvg({
   capturedDan: number;
   className?: string;
 }) {
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const bodyId = `basketBody_${uid}`;
+  const jadeId = `basketJade_${uid}`;
   const shownPebbles = Math.min(capturedDan, 9);
   const pebbleCoords = [
     { cx: 34, cy: 25, rx: 7.5, ry: 5, fill: '#E5E7EB' },
@@ -346,16 +362,16 @@ export function WovenBasketSvg({
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id="basketBody" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={bodyId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#D99B52" />
           <stop offset="60%" stopColor="#A66A2D" />
           <stop offset="100%" stopColor="#6F4116" />
         </linearGradient>
-        <radialGradient id="basketJade" cx="35%" cy="30%" r="70%">
+        <linearGradient id={jadeId} x1="0.2" y1="0" x2="0.85" y2="1">
           <stop offset="0%" stopColor="#FEF08A" />
           <stop offset="48%" stopColor="#34D399" />
           <stop offset="100%" stopColor="#047857" />
-        </radialGradient>
+        </linearGradient>
       </defs>
 
       {/* Bóng đổ của giỏ tre */}
@@ -385,7 +401,7 @@ export function WovenBasketSvg({
           cy="21"
           rx="12"
           ry="9"
-          fill="url(#basketJade)"
+          fill={`url(#${jadeId})`}
           stroke="#064E3B"
           strokeWidth="1.6"
         />
@@ -396,7 +412,7 @@ export function WovenBasketSvg({
           cy="22"
           rx="11.5"
           ry="8.5"
-          fill="url(#basketJade)"
+          fill={`url(#${jadeId})`}
           stroke="#064E3B"
           strokeWidth="1.6"
         />
@@ -405,7 +421,7 @@ export function WovenBasketSvg({
       {/* Thân giỏ đan nan tre */}
       <path
         d="M12 27 Q16 60 50 61 Q84 60 88 27 Q50 38 12 27 Z"
-        fill="url(#basketBody)"
+        fill={`url(#${bodyId})`}
         stroke="#4B280D"
         strokeWidth="2.4"
       />

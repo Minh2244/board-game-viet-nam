@@ -203,4 +203,82 @@ describe('Room Store (/api/room) — Mã 6 số chống trùng, F5 Rejoin, Cách
     });
     expect(afterDis.status).toBe(410);
   });
+
+  it('Chống phình dữ liệu cuối ván: sau 35 nước đi liên tiếp vẫn giữ giới hạn MAX_EVENTS_KEPT và delta/heartbeat siêu gọn', async () => {
+    const code = '778899';
+    const created = await handleRoomPost({
+      action: 'create',
+      game: 'co-ty-phu',
+      roomCode: code,
+      senderToken: 'host_perf',
+      snapshot: {
+        roomCode: code,
+        phase: 'PLAYING',
+        hostToken: 'host_perf',
+        humans: [
+          { playerToken: 'host_perf', name: 'Chủ', isHost: true, connected: true },
+          { playerToken: 'guest_perf', name: 'Khách', isHost: false, connected: true },
+        ],
+        bots: [],
+        matchVersion: 1,
+      },
+    });
+    expect(created.status).toBe(200);
+
+    let lastSeq = Number(created.body.seq);
+    for (let v = 2; v <= 36; v += 1) {
+      const res = await handleRoomPost({
+        action: 'push',
+        game: 'co-ty-phu',
+        roomCode: code,
+        senderToken: v % 2 === 0 ? 'host_perf' : 'guest_perf',
+        phase: 'PLAYING',
+        snapshot: {
+          roomCode: code,
+          phase: 'PLAYING',
+          hostToken: 'host_perf',
+          humans: [
+            { playerToken: 'host_perf', name: 'Chủ', isHost: true, connected: true },
+            { playerToken: 'guest_perf', name: 'Khách', isHost: false, connected: true },
+          ],
+          bots: [],
+          matchVersion: v,
+        },
+        packet: {
+          msgId: `m_${v}`,
+          senderToken: v % 2 === 0 ? 'host_perf' : 'guest_perf',
+          type: 'ACTION_COMMIT',
+          actionId: `act_${v}`,
+          matchVersion: v,
+        },
+      });
+      expect(res.status).toBe(200);
+      lastSeq = Number(res.body.seq);
+    }
+
+    // Lấy delta 3 nước cuối phải siêu nhanh và trả đúng 3 sự kiện
+    const delta = await handleRoomGet(
+      new URL(`http://localhost/api/room?game=co-ty-phu&code=${code}&sinceSeq=${lastSeq - 3}`),
+    );
+    expect(delta.status).toBe(200);
+    expect((delta.body.events as unknown[]).length).toBe(3);
+
+    // Lấy full snapshot -> số sự kiện giữ lại bị cắt gọn <= 24, matchVersion mới nhất = 36
+    const full = await handleRoomGet(
+      new URL(`http://localhost/api/room?game=co-ty-phu&code=${code}&sinceSeq=0&full=1`),
+    );
+    expect(full.status).toBe(200);
+    expect((full.body.events as unknown[]).length).toBeLessThanOrEqual(24);
+    expect((full.body.snapshot as { matchVersion: number }).matchVersion).toBe(36);
+
+    // Heartbeat gọn nhẹ không làm tăng seq
+    const hb = await handleRoomPost({
+      action: 'heartbeat',
+      game: 'co-ty-phu',
+      roomCode: code,
+      senderToken: 'guest_perf',
+    });
+    expect(hb.status).toBe(200);
+    expect(hb.body.seq).toBe(lastSeq);
+  });
 });

@@ -65,6 +65,7 @@ interface PeerChannelState {
   pc: RTCPeerConnection;
   dc: RTCDataChannel | null;
   makingOffer: boolean;
+  pendingCandidates: RTCIceCandidateInit[];
 }
 
 type WirePacket =
@@ -1051,7 +1052,12 @@ export class OAnQuanOnlineClient {
 
     try {
       const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
-      const state: PeerChannelState = { pc, dc: null, makingOffer: false };
+      const state: PeerChannelState = {
+        pc,
+        dc: null,
+        makingOffer: false,
+        pendingCandidates: [],
+      };
       this.rtcPeers.set(remoteToken, state);
 
       const attachChannel = (dc: RTCDataChannel) => {
@@ -1105,6 +1111,10 @@ export class OAnQuanOnlineClient {
       if (signal.kind === 'offer' && signal.sdp) {
         if (pc.signalingState !== 'stable' || peer.makingOffer) return;
         await pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
+        while (peer.pendingCandidates.length > 0) {
+          const cand = peer.pendingCandidates.shift();
+          if (cand) await pc.addIceCandidate(cand).catch(() => {});
+        }
         const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
         if (!this.destroyed && pc.localDescription?.sdp) {
@@ -1113,9 +1123,17 @@ export class OAnQuanOnlineClient {
       } else if (signal.kind === 'answer' && signal.sdp) {
         if (pc.signalingState === 'have-local-offer') {
           await pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+          while (peer.pendingCandidates.length > 0) {
+            const cand = peer.pendingCandidates.shift();
+            if (cand) await pc.addIceCandidate(cand).catch(() => {});
+          }
         }
       } else if (signal.kind === 'candidate' && signal.candidate) {
-        if (pc.remoteDescription) await pc.addIceCandidate(signal.candidate);
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(signal.candidate);
+        } else if (peer.pendingCandidates.length < 32) {
+          peer.pendingCandidates.push(signal.candidate);
+        }
       }
     } catch {
       // Fallback Redis Singapore vẫn bảo đảm 100%
@@ -1181,7 +1199,7 @@ export class OAnQuanOnlineClient {
           snapshot: snapshotClone,
           phase: snapshotClone?.phase,
         });
-        if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq === this.lastSeq + 1) {
           this.lastSeq = data.seq;
         }
         if (!this.destroyed) this.scheduleNextPoll(80);

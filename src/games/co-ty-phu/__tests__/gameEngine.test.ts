@@ -10,6 +10,7 @@ import {
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '@/games/co-ty-phu/data/cards';
 import { generateBoardTiles } from '@/games/co-ty-phu/data/mapGenerator';
 import { createInitialGameState, reduceGameAction } from '@/games/co-ty-phu/engine/reducer';
+import { rollSmartHumanDice } from '@/games/co-ty-phu/engine/smartDice';
 import {
   calculatePropertyRent,
   calculatePropertyTax,
@@ -445,4 +446,112 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
       expect(steps).toBeGreaterThan(0);
     }
   }, 15_000);
+
+  it('Xúc Xắc Thông Minh (Gói A + 38% Đổ Đôi khi tụ lực tối đa + Anti-Streak cắt chuỗi trả nợ + Bot 100% random)', () => {
+    // Dựng bàn 6 tụ kín đất phía trước Người chơi 0 (đang đứng ở ô 0 -> các ô 2..12 phía trước):
+    // Ô 2,4,5,7,8,9,10 (7 ô) là nhà đối thủ; Ô 12 là nhà bản thân; Ô 3 Cơ Hội, Ô 11 Khí Vận; Ô 6 Bến Xe trống
+    const state = createInitialGameState(makeSetup(6, 2, false));
+    const human = state.players[0];
+    const oppId = state.players[1].id;
+    human.isBot = false;
+    human.position = 0;
+
+    const oppTileIndices = [2, 4, 5, 7, 8, 9, 10];
+    for (const idx of oppTileIndices) {
+      if (state.tiles[idx].kind === 'PROPERTY' || state.tiles[idx].kind === 'UTILITY') {
+        state.tiles[idx].ownerId = oppId;
+        state.tiles[idx].buildingLevel = 2;
+      } else if (state.tiles[idx].kind === 'AUCTION_STATION' && state.tiles[idx].auctionState) {
+        state.tiles[idx].auctionState!.status = 'CLOSED';
+        state.tiles[idx].auctionState!.finalOwnerId = oppId;
+      }
+    }
+    if (state.tiles[12].kind === 'PROPERTY') {
+      state.tiles[12].ownerId = human.id;
+      state.tiles[12].buildingLevel = 1;
+    }
+
+    const oppSet = new Set(
+      oppTileIndices.filter((idx) => {
+        const t = state.tiles[idx];
+        return t.ownerId === oppId || t.auctionState?.finalOwnerId === oppId;
+      }),
+    );
+
+    const N = 4000;
+    // 1. Gói A chuẩn (chạm nhanh, consecutiveRentHits = 0): giảm mạnh nhà địch nhưng vẫn có hụt tự nhiên!
+    let oppHitsNormal = 0;
+    let doublesNormal = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [d1, d2] = rollSmartHumanDice(state, human, { rollPower: 0.56, forJail: false });
+      if (d1 === d2) doublesNormal += 1;
+      if (oppSet.has((human.position + d1 + d2) % 52)) oppHitsNormal += 1;
+    }
+    const normalOppRate = oppHitsNormal / N;
+    const normalDoubleRate = doublesNormal / N;
+    expect(normalOppRate).toBeGreaterThan(0.18);
+    expect(normalOppRate).toBeLessThan(0.46);
+    expect(normalDoubleRate).toBeGreaterThan(0.11);
+    expect(normalDoubleRate).toBeLessThan(0.24);
+
+    // 2. Anti-Streak (consecutiveRentHits = 2): tỉ lệ dính nhà địch giảm sâu rõ rệt so với thường
+    human.consecutiveRentHits = 2;
+    let oppHitsAnti = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [d1, d2] = rollSmartHumanDice(state, human, { rollPower: 0.56, forJail: false });
+      if (oppSet.has((human.position + d1 + d2) % 52)) oppHitsAnti += 1;
+    }
+    const antiOppRate = oppHitsAnti / N;
+    expect(antiOppRate).toBeLessThan(normalOppRate - 0.08);
+    expect(antiOppRate).toBeGreaterThan(0.05);
+
+    // 3. Tụ lực tối đa (rollPower = 0.98) -> Đổ Đôi ~38% (trong khoảng 33%..43%)
+    human.consecutiveRentHits = 0;
+    human.consecutiveDoubles = 0;
+    let doublesMaxCharge = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [d1, d2] = rollSmartHumanDice(state, human, { rollPower: 0.98, forJail: false });
+      if (d1 === d2) doublesMaxCharge += 1;
+    }
+    const maxChargeDoubleRate = doublesMaxCharge / N;
+    expect(maxChargeDoubleRate).toBeGreaterThan(0.33);
+    expect(maxChargeDoubleRate).toBeLessThan(0.43);
+
+    // 4. Khi đã đổ đôi 2 lần liên tiếp (consecutiveDoubles === 2), tụ lực tối đa KHÔNG kích hoạt 38% để tránh tự vào tù!
+    human.consecutiveDoubles = 2;
+    let doublesThird = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [d1, d2] = rollSmartHumanDice(state, human, { rollPower: 0.99, forJail: false });
+      if (d1 === d2) doublesThird += 1;
+    }
+    expect(doublesThird / N).toBeLessThan(0.25);
+
+    // 5. Tụ lực tối đa trong tù -> tỉ lệ thoát tù ~30% (25%..36%)
+    human.inJail = true;
+    human.position = JAIL_TILE_INDEX;
+    let jailEscapes = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [d1, d2] = rollSmartHumanDice(state, human, { rollPower: 0.98, forJail: true });
+      if (d1 === d2) jailEscapes += 1;
+    }
+    expect(jailEscapes / N).toBeGreaterThan(0.25);
+    expect(jailEscapes / N).toBeLessThan(0.36);
+
+    // 6. Kiểm tra reducer cập nhật consecutiveRentHits khi dính nhà đối thủ 2 lượt rồi thoát
+    let trackState = createInitialGameState(makeSetup(2, 1, false));
+    trackState.tiles[1].ownerId = trackState.players[1].id;
+    trackState.tiles[2].ownerId = trackState.players[1].id;
+    trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 1 của P2
+    expect(trackState.players[0].consecutiveRentHits).toBe(1);
+    // Cho P2 đi 1 lượt vô thưởng vô phạt rồi quay lại P1
+    trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [3] }).state; // P2 -> ô 3 Cơ Hội
+    trackState = reduceGameAction(trackState, { type: 'CONFIRM_CARD' }).state;
+    if (trackState.phase === 'BUY_OR_SKIP_DECISION') {
+      trackState = reduceGameAction(trackState, { type: 'BUY_PROPERTY', buy: false }).state;
+    }
+    if (trackState.currentPlayerIndex === 0 && trackState.phase === 'WAIT_ROLL') {
+      trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 2 của P2 -> lần 2 liên tiếp!
+      expect(trackState.players[0].consecutiveRentHits).toBe(2);
+    }
+  });
 });

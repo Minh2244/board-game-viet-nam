@@ -106,6 +106,8 @@ export interface PlayerState {
   inJail: boolean;
   jailTurnsUsed: number; // 0..3
   consecutiveDoubles: number;
+  /** Số lượt liên tiếp vừa phải trả tiền thuê nhà/bến/thủy điện đối thủ (dùng cho Anti-Streak) */
+  consecutiveRentHits?: number;
   getOutOfJailCards: number;
   lastDiceRollTotal: number;
 }
@@ -199,9 +201,9 @@ export interface GameState {
 }
 
 export type GameAction =
-  | { type: 'ROLL_DICE'; diceValues?: number[] }
+  | { type: 'ROLL_DICE'; diceValues?: number[]; rollPower?: number }
   | { type: 'USE_JAIL_FREE_CARD' }
-  | { type: 'ROLL_FOR_JAIL' ; diceValues?: number[] }
+  | { type: 'ROLL_FOR_JAIL'; diceValues?: number[]; rollPower?: number }
   | { type: 'ANSWER_JAIL_BAIL'; pay: boolean }
   | { type: 'BUY_PROPERTY'; buy: boolean }
   | { type: 'UPGRADE_PROPERTY'; upgrade: boolean }

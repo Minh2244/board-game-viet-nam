@@ -71,6 +71,7 @@ interface PeerChannelState {
   pc: RTCPeerConnection;
   dc: RTCDataChannel | null;
   makingOffer: boolean;
+  pendingCandidates: RTCIceCandidateInit[];
 }
 
 type WirePacket =
@@ -1309,7 +1310,12 @@ export class OnlineRoomClient {
 
     try {
       const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
-      const state: PeerChannelState = { pc, dc: null, makingOffer: false };
+      const state: PeerChannelState = {
+        pc,
+        dc: null,
+        makingOffer: false,
+        pendingCandidates: [],
+      };
       this.rtcPeers.set(remoteToken, state);
 
       const attachChannel = (dc: RTCDataChannel) => {
@@ -1376,6 +1382,10 @@ export class OnlineRoomClient {
       if (signal.kind === 'offer' && signal.sdp) {
         if (pc.signalingState !== 'stable' || peer.makingOffer) return;
         await pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
+        while (peer.pendingCandidates.length > 0) {
+          const cand = peer.pendingCandidates.shift();
+          if (cand) await pc.addIceCandidate(cand).catch(() => {});
+        }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         if (!this.destroyed && pc.localDescription?.sdp) {
@@ -1387,10 +1397,16 @@ export class OnlineRoomClient {
       } else if (signal.kind === 'answer' && signal.sdp) {
         if (pc.signalingState === 'have-local-offer') {
           await pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
+          while (peer.pendingCandidates.length > 0) {
+            const cand = peer.pendingCandidates.shift();
+            if (cand) await pc.addIceCandidate(cand).catch(() => {});
+          }
         }
       } else if (signal.kind === 'candidate' && signal.candidate) {
         if (pc.remoteDescription) {
           await pc.addIceCandidate(signal.candidate);
+        } else if (peer.pendingCandidates.length < 32) {
+          peer.pendingCandidates.push(signal.candidate);
         }
       }
     } catch {
@@ -1447,7 +1463,8 @@ export class OnlineRoomClient {
       packet,
     })
       .then(({ data }) => {
-        if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
+        // Chỉ tăng lastSeq khi liền kề tuyệt đối (tránh nhảy cóc bỏ sót gói ACTION_COMMIT của đối thủ!)
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq === this.lastSeq + 1) {
           this.lastSeq = data.seq;
         }
       })
@@ -1475,7 +1492,8 @@ export class OnlineRoomClient {
           snapshot: snapshotClone,
           phase: snapshotClone?.phase,
         });
-        if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
+        // Chỉ tăng lastSeq khi liền kề (data.seq === this.lastSeq + 1), nếu có khoảng trống để pollOnce kéo bù sự kiện đối thủ!
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq === this.lastSeq + 1) {
           this.lastSeq = data.seq;
         }
         if (!this.destroyed) {

@@ -2,7 +2,12 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     font-family: 'Be Vietnam Pro', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  svg {
+    forced-color-adjust: none;
   }
 
   html,

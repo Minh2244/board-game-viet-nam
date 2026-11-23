@@ -3,6 +3,7 @@ import { COLOR_GROUPS } from '../data/boardData';
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '../data/cards';
 import { LAND_COLORS } from '../data/characters';
 import { generateBoardTiles, pickRandomPropertyDestination } from '../data/mapGenerator';
+import { rollSmartHumanDice } from './smartDice';
 import {
   AUCTION_BID_INCREMENT,
   AUCTION_START_PRICE,
@@ -80,6 +81,7 @@ export function createInitialGameState(config: MatchSetupConfig): GameState {
       inJail: false,
       jailTurnsUsed: 0,
       consecutiveDoubles: 0,
+      consecutiveRentHits: 0,
       getOutOfJailCards: 0,
       lastDiceRollTotal: 2,
     };
@@ -569,17 +571,20 @@ function resolveTileLanding(
   switch (tile.kind) {
     case 'GO':
     case 'FREE_PARKING': {
+      player.consecutiveRentHits = 0;
       finishStepAndRouteNext(state, events);
       return;
     }
 
     case 'GO_TO_JAIL': {
+      player.consecutiveRentHits = 0;
       sendPlayerToJail(state, events, player, 'Dẫm ô Bị Bắt Vào Tù');
       finishStepAndRouteNext(state, events);
       return;
     }
 
     case 'VISIT_JAIL': {
+      player.consecutiveRentHits = 0;
       if (player.inJail) {
         finishStepAndRouteNext(state, events);
         return;
@@ -597,6 +602,7 @@ function resolveTileLanding(
     }
 
     case 'HERITAGE': {
+      player.consecutiveRentHits = 0;
       player.cash += HERITAGE_REWARD;
       events.push({
         type: 'CASH_CHANGE',
@@ -611,6 +617,7 @@ function resolveTileLanding(
     }
 
     case 'TAX': {
+      player.consecutiveRentHits = 0;
       const tax = tile.fixedTaxAmount ?? calculatePropertyTax(state.tiles, player.id);
       enqueueDebt(state, events, player.id, 'BANK', tax, tile.name);
       return;
@@ -618,6 +625,7 @@ function resolveTileLanding(
 
     case 'CHANCE':
     case 'FATE': {
+      player.consecutiveRentHits = 0;
       const card = drawCard(state, tile.kind, events);
       state.activeCard = { card, drawerId: player.id, tileIndex };
       state.phase = 'CARD_REVEAL';
@@ -662,11 +670,13 @@ function resolveTileLanding(
       const auc = tile.auctionState!;
       if (auc.status === 'CLOSED' && auc.finalOwnerId) {
         if (auc.finalOwnerId === player.id) {
+          player.consecutiveRentHits = 0;
           finishStepAndRouteNext(state, events);
           return;
         }
         const rent = calculateStationRent(state.players, tile);
         if (rent === 0) {
+          player.consecutiveRentHits = 0;
           const owner = state.players.find((p) => p.id === auc.finalOwnerId);
           addLog(
             state,
@@ -676,10 +686,12 @@ function resolveTileLanding(
           finishStepAndRouteNext(state, events);
           return;
         }
+        player.consecutiveRentHits = (player.consecutiveRentHits ?? 0) + 1;
         enqueueDebt(state, events, player.id, auc.finalOwnerId, rent, `Vé ${tile.name}`);
         return;
       }
 
+      player.consecutiveRentHits = 0;
       // Trạm chưa chốt: nếu đang giữ giá cao nhất hoặc đã bị loại -> bỏ qua hỏi
       if (auc.leaderId === player.id || auc.eliminatedPlayerIds.includes(player.id)) {
         finishStepAndRouteNext(state, events);
@@ -693,6 +705,7 @@ function resolveTileLanding(
 
     case 'UTILITY': {
       if (!tile.ownerId) {
+        player.consecutiveRentHits = 0;
         if (player.cash >= (tile.basePrice ?? 2_000_000)) {
           state.pendingBuyOrUpgradeTileIndex = tile.index;
           state.phase = 'BUY_OR_SKIP_DECISION';
@@ -704,12 +717,14 @@ function resolveTileLanding(
       }
 
       if (tile.ownerId === player.id) {
+        player.consecutiveRentHits = 0;
         finishStepAndRouteNext(state, events);
         return;
       }
 
       const rent = calculateUtilityRent(state.tiles, state.players, tile, player.lastDiceRollTotal);
       if (rent === 0) {
+        player.consecutiveRentHits = 0;
         const owner = state.players.find((p) => p.id === tile.ownerId);
         addLog(
           state,
@@ -719,12 +734,14 @@ function resolveTileLanding(
         finishStepAndRouteNext(state, events);
         return;
       }
+      player.consecutiveRentHits = (player.consecutiveRentHits ?? 0) + 1;
       enqueueDebt(state, events, player.id, tile.ownerId, rent, `Tiền điện ${tile.name}`);
       return;
     }
 
     case 'PROPERTY': {
       if (!tile.ownerId) {
+        player.consecutiveRentHits = 0;
         const price = tile.basePrice ?? 1_000_000;
         if (player.cash >= price) {
           state.pendingBuyOrUpgradeTileIndex = tile.index;
@@ -737,6 +754,7 @@ function resolveTileLanding(
       }
 
       if (tile.ownerId === player.id) {
+        player.consecutiveRentHits = 0;
         const upCost = getUpgradeCost(tile);
         if (tile.buildingLevel < 5 && player.cash >= upCost) {
           state.pendingBuyOrUpgradeTileIndex = tile.index;
@@ -749,6 +767,7 @@ function resolveTileLanding(
 
       const rent = calculatePropertyRent(state.tiles, state.players, tile);
       if (rent === 0) {
+        player.consecutiveRentHits = 0;
         const owner = state.players.find((p) => p.id === tile.ownerId);
         addLog(
           state,
@@ -758,6 +777,7 @@ function resolveTileLanding(
         finishStepAndRouteNext(state, events);
         return;
       }
+      player.consecutiveRentHits = (player.consecutiveRentHits ?? 0) + 1;
       const hasMonopoly =
         tile.colorGroup !== undefined && playerOwnsFullColorGroup(state.tiles, tile.ownerId, tile.colorGroup);
       const rentReason = hasMonopoly ? `Thuê ${tile.name} (×2 bộ màu)` : `Thuê ${tile.name}`;
@@ -794,7 +814,12 @@ export function reduceGameAction(
   switch (action.type) {
     case 'ROLL_DICE': {
       if (state.phase !== 'WAIT_ROLL') return { state, events };
-      const dice = rollCryptoDice(state.diceCount, action.diceValues);
+      const dice =
+        action.diceValues && action.diceValues.length === state.diceCount
+          ? [...action.diceValues]
+          : current.isBot
+            ? rollCryptoDice(state.diceCount)
+            : rollSmartHumanDice(state, current, { rollPower: action.rollPower, forJail: false });
       const total = dice.reduce((a, b) => a + b, 0);
       const isDouble = state.diceCount === 2 && dice[0] === dice[1];
 
@@ -853,7 +878,12 @@ export function reduceGameAction(
       if (state.phase !== 'IN_JAIL_DECISION' || !current.inJail) {
         return { state, events };
       }
-      const dice = rollCryptoDice(state.diceCount, action.diceValues);
+      const dice =
+        action.diceValues && action.diceValues.length === state.diceCount
+          ? [...action.diceValues]
+          : current.isBot
+            ? rollCryptoDice(state.diceCount)
+            : rollSmartHumanDice(state, current, { rollPower: action.rollPower, forJail: true });
       const total = dice.reduce((a, b) => a + b, 0);
       const isDouble = state.diceCount === 2 && dice[0] === dice[1];
       const escaped = state.diceCount === 2 ? isDouble : dice[0] === 6;

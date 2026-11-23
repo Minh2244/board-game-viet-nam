@@ -25,8 +25,9 @@ export interface StoredRoomDocument {
 const LOBBY_TTL_SEC = 15 * 60; // 15 phút không hoạt động ở sảnh chờ mới tự dọn
 const PLAYING_TTL_SEC = 30 * 60; // 30 phút cả bàn bỏ ngang mới tự dọn (đang chơi heartbeat gia hạn liên tục)
 const DISSOLVED_TTL_SEC = 60; // Giữ 60s để mọi máy nhận thông báo giải tán phòng
-const MAX_EVENTS_KEPT = 60;
+const MAX_EVENTS_KEPT = 24;
 const HB_FIELD_PREFIX = 'hb:';
+const HB_MAP_FIELD = 'hb_map';
 const EV_FIELD_PREFIX = 'ev:';
 
 let cachedRedis: Redis | null | undefined;
@@ -92,6 +93,57 @@ function parseHeartbeatsFromHash(raw: Record<string, unknown> | null): Record<st
     }
   }
   return out;
+}
+
+function parseHeartbeatsMap(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw) return out;
+  let obj: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return out;
+    }
+  }
+  if (!obj || typeof obj !== 'object') return out;
+  for (const [token, val] of Object.entries(obj as Record<string, unknown>)) {
+    const ts = Number(val);
+    if (token && Number.isFinite(ts) && ts > 0) {
+      out[token] = ts;
+    }
+  }
+  return out;
+}
+
+function mergeHeartbeats(
+  ...maps: Array<Record<string, number> | undefined | null>
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const m of maps) {
+    if (!m) continue;
+    for (const [token, ts] of Object.entries(m)) {
+      if (Number.isFinite(ts) && ts > (out[token] ?? 0)) {
+        out[token] = ts;
+      }
+    }
+  }
+  return out;
+}
+
+function parseDocDataField(raw: unknown): StoredRoomDocument | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as StoredRoomDocument;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') {
+    return raw as StoredRoomDocument;
+  }
+  return null;
 }
 
 function parseEventValue(val: unknown): RoomEventRecord | null {
@@ -191,21 +243,45 @@ async function readDeltaEventsFast(
   return { phase: entry.doc.phase, events };
 }
 
+/**
+ * Đọc gọn nhẹ tài liệu phòng CHỈ lấy `seq`, `phase`, `data`, `hb_map` bằng 1 lệnh HMGET (~18KB thay vì HGETALL).
+ * Dùng cho các thao tác POST (`push`, `join`, `rejoin`, `dissolve`) vốn không cần tải lại các field `ev:*`.
+ */
+async function readRoomDocLight(key: string): Promise<StoredRoomDocument | null> {
+  const redis = getUpstashRedis();
+  if (redis) {
+    const raw = await redis.hmget<Record<string, unknown>>(key, 'seq', 'phase', 'data', HB_MAP_FIELD);
+    if (!raw || !raw.data) return null;
+    const doc = parseDocDataField(raw.data);
+    if (!doc) return null;
+
+    const latestSeq = Number(raw.seq);
+    if (Number.isFinite(latestSeq) && latestSeq > doc.seq) {
+      doc.seq = latestSeq;
+    }
+    if (raw.phase === 'LOBBY' || raw.phase === 'PLAYING' || raw.phase === 'DISSOLVED') {
+      doc.phase = raw.phase;
+    }
+    doc.heartbeats = mergeHeartbeats(doc.heartbeats, parseHeartbeatsMap(raw[HB_MAP_FIELD]));
+    doc.events = [];
+    return doc;
+  }
+
+  cleanExpiredMemory();
+  const entry = memoryRooms.get(key);
+  if (!entry) return null;
+  const cloned = structuredClone(entry.doc);
+  cloned.heartbeats = mergeHeartbeats(cloned.heartbeats, entry.heartbeats);
+  cloned.events = [];
+  return cloned;
+}
+
 async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
   const redis = getUpstashRedis();
   if (redis) {
     const all = await redis.hgetall<Record<string, unknown>>(key);
     if (!all || !all.data) return null;
-    let doc: StoredRoomDocument | null = null;
-    if (typeof all.data === 'string') {
-      try {
-        doc = JSON.parse(all.data) as StoredRoomDocument;
-      } catch {
-        return null;
-      }
-    } else if (typeof all.data === 'object') {
-      doc = all.data as StoredRoomDocument;
-    }
+    const doc = parseDocDataField(all.data);
     if (!doc) return null;
 
     const latestSeq = Number(all.seq);
@@ -216,8 +292,11 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
       doc.phase = all.phase;
     }
 
-    const separateHbs = parseHeartbeatsFromHash(all);
-    doc.heartbeats = { ...(doc.heartbeats || {}), ...separateHbs };
+    doc.heartbeats = mergeHeartbeats(
+      doc.heartbeats,
+      parseHeartbeatsMap(all[HB_MAP_FIELD]),
+      parseHeartbeatsFromHash(all),
+    );
 
     const hashEvents = parseEventsFromHash(all);
     if (hashEvents.length > 0) {
@@ -233,7 +312,7 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
   const entry = memoryRooms.get(key);
   if (!entry) return null;
   const cloned = structuredClone(entry.doc);
-  cloned.heartbeats = { ...cloned.heartbeats, ...entry.heartbeats };
+  cloned.heartbeats = mergeHeartbeats(cloned.heartbeats, entry.heartbeats);
   cloned.events = Array.from(entry.eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
   return cloned;
 }
@@ -292,12 +371,14 @@ async function pushEventOnlyFast(
   if (nextSeq > MAX_EVENTS_KEPT) {
     entry.eventsBySeq.delete(nextSeq - MAX_EVENTS_KEPT);
   }
-  entry.doc.events = Array.from(entry.eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
+  entry.doc.events = [];
   return nextSeq;
 }
 
 /**
  * Cấp số thứ tự `seq` nguyên tử bằng HINCRBY và lưu sự kiện vào field riêng `ev:<seq>`.
+ * QUAN TRỌNG: Tuyệt đối KHÔNG nhồi mảng `doc.events` (vốn chứa hàng chục bản sao `resultingState`) vào trường `data`
+ * để giữ kích thước `data` luôn gọn ~18KB thay vì phình lên >2MB sau 100-200 lượt!
  */
 async function commitRoomUpdateAtomic(
   key: string,
@@ -307,6 +388,9 @@ async function commitRoomUpdateAtomic(
   newPacket?: Record<string, unknown> | null,
 ): Promise<number> {
   const ttl = ttlForPhase(doc.phase);
+  const nextHeartbeats = mergeHeartbeats(doc.heartbeats, { [senderToken]: now });
+  doc.heartbeats = nextHeartbeats;
+
   const redis = getUpstashRedis();
   if (redis) {
     const allocatedSeq = await redis.hincrby(key, 'seq', 1);
@@ -321,13 +405,16 @@ async function commitRoomUpdateAtomic(
         }
       : null;
 
-    if (eventRecord) {
-      doc.events = [...(doc.events || []), eventRecord].slice(-MAX_EVENTS_KEPT);
-    }
+    // Lưu bản nhẹ không đính kèm `events` trong `data` (mọi sự kiện delta đã nằm riêng tại `ev:<seq>`)
+    const slimDocForData: StoredRoomDocument = {
+      ...doc,
+      events: [],
+    };
 
     const fields: Record<string, string> = {
       phase: doc.phase,
-      data: JSON.stringify(doc),
+      data: JSON.stringify(slimDocForData),
+      [HB_MAP_FIELD]: JSON.stringify(nextHeartbeats),
       [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
     };
     if (eventRecord) {
@@ -362,8 +449,9 @@ async function commitRoomUpdateAtomic(
     }
   }
 
-  doc.events = Array.from(eventsBySeq.values()).sort((a, b) => a.seq - b.seq);
-  const heartbeats = { ...(existing?.heartbeats || {}), ...(doc.heartbeats || {}), [senderToken]: now };
+  // Giữ `doc.events` rỗng trong snapshot gốc (các sự kiện live đọc từ `eventsBySeq`)
+  doc.events = [];
+  const heartbeats = mergeHeartbeats(existing?.heartbeats, doc.heartbeats, { [senderToken]: now });
   doc.heartbeats = heartbeats;
 
   memoryRooms.set(key, {
@@ -376,7 +464,7 @@ async function commitRoomUpdateAtomic(
 }
 
 /**
- * Cập nhật nhịp tim (heartbeat) vào field Hash riêng `hb:<token>` + gia hạn TTL trượt.
+ * Cập nhật nhịp tim (heartbeat) siêu nhẹ bằng HMGET chỉ 3 field (~250 bytes thay vì HGETALL tải hàng MB!).
  */
 async function touchRoomHeartbeatOnly(
   key: string,
@@ -385,34 +473,30 @@ async function touchRoomHeartbeatOnly(
 ): Promise<{ seq: number; phase: RoomPhase; heartbeats: Record<string, number> } | null> {
   const redis = getUpstashRedis();
   if (redis) {
-    const existingSeq = await redis.hget<string | number>(key, 'seq');
-    if (existingSeq === null || existingSeq === undefined) return null;
+    const raw = await redis.hmget<Record<string, unknown>>(key, 'seq', 'phase', HB_MAP_FIELD);
+    if (!raw || raw.seq === null || raw.seq === undefined) return null;
 
-    const existingPhaseRaw = await redis.hget<string>(key, 'phase');
+    const seq = Number(raw.seq) || 0;
     const phase: RoomPhase =
-      existingPhaseRaw === 'PLAYING' || existingPhaseRaw === 'DISSOLVED' ? existingPhaseRaw : 'LOBBY';
+      raw.phase === 'PLAYING' || raw.phase === 'DISSOLVED' ? raw.phase : 'LOBBY';
 
     if (phase === 'DISSOLVED') {
-      return { seq: Number(existingSeq) || 0, phase, heartbeats: {} };
+      return { seq, phase, heartbeats: {} };
     }
 
+    const heartbeats = mergeHeartbeats(parseHeartbeatsMap(raw[HB_MAP_FIELD]), {
+      [senderToken]: now,
+    });
     const ttl = ttlForPhase(phase);
     const pipe = redis.pipeline();
-    pipe.hset(key, { [`${HB_FIELD_PREFIX}${senderToken}`]: String(now) });
+    pipe.hset(key, {
+      [HB_MAP_FIELD]: JSON.stringify(heartbeats),
+      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
+    });
     pipe.expire(key, ttl);
-    pipe.hgetall(key);
-    const results = await pipe.exec();
-    const allFields = (results?.[2] as Record<string, unknown> | null) ?? null;
-    const seq = Number(allFields?.seq ?? existingSeq) || 0;
-    const latestPhaseRaw = allFields?.phase;
-    const latestPhase: RoomPhase =
-      latestPhaseRaw === 'PLAYING' || latestPhaseRaw === 'DISSOLVED' ? latestPhaseRaw : phase;
+    await pipe.exec();
 
-    return {
-      seq,
-      phase: latestPhase,
-      heartbeats: parseHeartbeatsFromHash(allFields),
-    };
+    return { seq, phase, heartbeats };
   }
 
   cleanExpiredMemory();
@@ -439,7 +523,8 @@ async function claimRoomKeyAtomic(key: string, initialDoc: StoredRoomDocument): 
     const pipe = redis.pipeline();
     pipe.hset(key, {
       phase: initialDoc.phase,
-      data: JSON.stringify(initialDoc),
+      data: JSON.stringify({ ...initialDoc, events: [] }),
+      [HB_MAP_FIELD]: JSON.stringify(initialDoc.heartbeats),
       [`${HB_FIELD_PREFIX}${initialDoc.hostToken}`]: String(initialDoc.createdAt),
     });
     pipe.expire(key, ttl);
@@ -677,7 +762,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     };
   }
 
-  const doc = await readRoomDoc(key);
+  const doc = await readRoomDocLight(key);
   if (!doc) {
     return {
       status: 404,

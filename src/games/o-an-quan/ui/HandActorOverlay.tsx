@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { CharacterId } from '../engine/types';
 
 export type HandPose =
@@ -52,6 +53,10 @@ export function HandActorOverlay({
   shockwave: SlapShockwave | null;
   dropRipple: DropRipple | null;
 }) {
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const skinId = `oaqHandSkin_${uid}`;
+  const sleeveId = `oaqSleeve_${uid}`;
+  const jadeId = `oaqHandJade_${uid}`;
   const isBoy = hand?.characterId === 'cu_ti';
   const sleeveLight = isBoy ? '#9A6340' : '#FB7185';
   const sleeveDark = isBoy ? '#5C3520' : '#BE123C';
@@ -105,7 +110,7 @@ export function HandActorOverlay({
           C 90 83, 86 96, 78 106
           Z
         "
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.8"
         strokeLinejoin="round"
@@ -164,7 +169,7 @@ export function HandActorOverlay({
           C 94 85, 87 98, 78 106
           Z
         "
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.8"
         strokeLinejoin="round"
@@ -191,7 +196,7 @@ export function HandActorOverlay({
       )}
       {hasMandarin && (
         <g>
-          <ellipse cx="60" cy="55" rx="15" ry="11.5" fill="url(#oaqHandJade)" stroke="#064E3B" strokeWidth="2.2" />
+          <ellipse cx="60" cy="55" rx="15" ry="11.5" fill={`url(#${jadeId})`} stroke="#064E3B" strokeWidth="2.2" />
           <ellipse cx="55" cy="51" rx="4.5" ry="2.8" transform="rotate(-18 55 51)" fill="#FFFFFF" opacity="0.6" />
         </g>
       )}
@@ -199,25 +204,25 @@ export function HandActorOverlay({
       {/* 4 NGÓN TAY CO CỤP GẬP KHỚP ÔM CHẶT PHÍA TRÊN SỎI (rõ từng đốt cong!) */}
       <path
         d="M 32 54 C 31 39, 44 37, 46 51 C 46 57, 34 59, 32 54 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.4"
       />
       <path
         d="M 46 49 C 46 33, 60 33, 61 48 C 61 55, 47 56, 46 49 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.4"
       />
       <path
         d="M 61 50 C 62 34, 76 35, 76 50 C 75 56, 62 56, 61 50 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.4"
       />
       <path
         d="M 76 55 C 78 41, 90 43, 89 57 C 88 63, 76 62, 76 55 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.4"
       />
@@ -225,7 +230,7 @@ export function HandActorOverlay({
       {/* Ngón cái quặp ngang khóa chặt miệng nắm tay phía trước */}
       <path
         d="M 28 77 C 24 65, 36 59, 52 65 C 61 69, 60 79, 49 81 C 39 83, 30 82, 28 77 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.5"
       />
@@ -247,7 +252,7 @@ export function HandActorOverlay({
           C 92 85, 86 98, 78 106
           Z
         "
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.8"
         strokeLinejoin="round"
@@ -268,19 +273,19 @@ export function HandActorOverlay({
       {/* 3 ngón giữa, áp út, út khum giữ sỏi bên phải */}
       <path
         d="M 55 51 C 56 37, 68 38, 69 51 C 69 57, 56 57, 55 51 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.3"
       />
       <path
         d="M 68 53 C 70 40, 81 42, 81 55 C 80 61, 69 60, 68 53 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.3"
       />
       <path
         d="M 79 60 C 82 49, 92 52, 91 64 C 89 69, 79 67, 79 60 Z"
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.3"
       />
@@ -292,7 +297,7 @@ export function HandActorOverlay({
             ? 'M 47 52 C 42 35, 36 22, 41 16 C 46 11, 54 16, 55 27 L 57 49 Z'
             : 'M 47 52 C 40 38, 33 27, 36 21 C 40 16, 48 19, 52 30 L 57 49 Z'
         }
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.5"
         strokeLinejoin="round"
@@ -305,7 +310,7 @@ export function HandActorOverlay({
             ? 'M 32 74 C 19 64, 14 50, 20 44 C 25 39, 34 45, 39 56 L 45 71 Z'
             : 'M 32 74 C 21 61, 18 46, 25 40 C 31 36, 39 43, 43 54 L 47 70 Z'
         }
-        fill="url(#oaqHandSkin)"
+        fill={`url(#${skinId})`}
         stroke="#4A2510"
         strokeWidth="2.5"
         strokeLinejoin="round"
@@ -479,26 +484,26 @@ export function HandActorOverlay({
                 className="h-[112px] w-[96px] overflow-visible drop-shadow-[0_6px_8px_rgba(24,8,2,0.38)]"
               >
                 <defs>
-                  <radialGradient id="oaqHandSkin" cx="42%" cy="32%" r="68%">
+                  <linearGradient id={skinId} x1="0.2" y1="0" x2="0.85" y2="1">
                     <stop offset="0%" stopColor="#FFF0DD" />
-                    <stop offset="68%" stopColor="#FAD5B0" />
+                    <stop offset="65%" stopColor="#FAD5B0" />
                     <stop offset="100%" stopColor="#E3A878" />
-                  </radialGradient>
-                  <linearGradient id="oaqSleeveGrad" x1="0" y1="0" x2="1" y2="1">
+                  </linearGradient>
+                  <linearGradient id={sleeveId} x1="0" y1="0" x2="1" y2="1">
                     <stop offset="0%" stopColor={sleeveLight} />
                     <stop offset="100%" stopColor={sleeveDark} />
                   </linearGradient>
-                  <radialGradient id="oaqHandJade" cx="35%" cy="30%" r="70%">
+                  <linearGradient id={jadeId} x1="0.2" y1="0" x2="0.85" y2="1">
                     <stop offset="0%" stopColor="#FEF9C3" />
                     <stop offset="45%" stopColor="#34D399" />
                     <stop offset="100%" stopColor="#047857" />
-                  </radialGradient>
+                  </linearGradient>
                 </defs>
 
                 {/* Cổ tay & ống tay áo truyền thống xắn gọn */}
                 <path
                   d="M 44 101 L 78 101 L 86 134 Q 61 140 36 134 Z"
-                  fill="url(#oaqSleeveGrad)"
+                  fill={`url(#${sleeveId})`}
                   stroke={sleeveBorder}
                   strokeWidth="2.8"
                   strokeLinejoin="round"

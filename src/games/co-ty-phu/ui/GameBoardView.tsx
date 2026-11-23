@@ -28,6 +28,7 @@ import { COLOR_GROUPS } from '../data/boardData';
 import { CO_TY_PHU_CHARACTERS } from '../data/characters';
 import { getLandmarkArtworkUrl } from '../data/landmarkArtwork';
 import { reduceGameAction } from '../engine/reducer';
+import { rollSmartHumanDice } from '../engine/smartDice';
 import {
   AUCTION_BID_INCREMENT,
   formatShortVnd,
@@ -1752,14 +1753,24 @@ export function GameBoardView({
       const online = onlineContextRef.current;
 
       // Trong chế độ Online, người khởi phát nước đi tự quay số xúc xắc trước để phát y hệt cho mọi máy
+      // (Người chơi thật dùng Xúc Xắc Thông Minh Gói A + bonus tụ lực Đổ Đôi; Máy AI giữ random 100%)
       let resolvedAction: GameAction = action;
-      if (online && !remoteOverride) {
-        if (
-          (action.type === 'ROLL_DICE' || action.type === 'ROLL_FOR_JAIL') &&
-          !action.diceValues
-        ) {
-          const diceValues = Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6));
-          resolvedAction = { ...action, diceValues };
+      if (
+        (action.type === 'ROLL_DICE' || action.type === 'ROLL_FOR_JAIL') &&
+        !action.diceValues
+      ) {
+        if (online && !remoteOverride) {
+          const actingPlayer = prevState.players[prevState.currentPlayerIndex];
+          const isBotRoll = Boolean(actingPlayer?.isBot);
+          const diceValues = isBotRoll
+            ? Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6))
+            : rollSmartHumanDice(prevState, actingPlayer, {
+                rollPower,
+                forJail: action.type === 'ROLL_FOR_JAIL',
+              });
+          resolvedAction = { ...action, diceValues, rollPower };
+        } else if (!online) {
+          resolvedAction = { ...action, rollPower };
         }
       }
 
@@ -2769,34 +2780,40 @@ export function GameBoardView({
                     <div className="animate-tap-ring h-44 w-44 rounded-full border-2 border-amber-300/60" />
                   )}
 
-                  {(isChargingHold || remoteCharge) && (
-                    <svg
-                      viewBox="0 0 120 120"
-                      className="h-52 w-52 -rotate-90 drop-shadow-[0_0_12px_rgba(251,191,36,0.75)]"
-                    >
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="52"
-                        fill="none"
-                        stroke="rgba(255,255,255,0.16)"
-                        strokeWidth="6"
-                      />
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="52"
-                        fill="none"
-                        stroke={(isChargingHold ? chargeLevel : remoteCharge?.level ?? 0) > 0.72 ? '#F59E0B' : '#38BDF8'}
-                        strokeWidth="6.5"
-                        strokeLinecap="round"
-                        strokeDasharray={2 * Math.PI * 52}
-                        strokeDashoffset={
-                          2 * Math.PI * 52 * (1 - (isChargingHold ? chargeLevel : remoteCharge?.level ?? 0))
-                        }
-                      />
-                    </svg>
-                  )}
+                  {(isChargingHold || remoteCharge) && (() => {
+                    const activeCharge = isChargingHold ? chargeLevel : remoteCharge?.level ?? 0;
+                    const isMaxGold = activeCharge >= 0.9;
+                    return (
+                      <svg
+                        viewBox="0 0 120 120"
+                        className={`h-52 w-52 -rotate-90 transition-all duration-150 ${
+                          isMaxGold
+                            ? 'drop-shadow-[0_0_20px_rgba(253,224,71,0.95)]'
+                            : 'drop-shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                        }`}
+                      >
+                        <circle
+                          cx="60"
+                          cy="60"
+                          r="52"
+                          fill="none"
+                          stroke={isMaxGold ? 'rgba(253,224,71,0.34)' : 'rgba(255,255,255,0.16)'}
+                          strokeWidth={isMaxGold ? '7.5' : '6'}
+                        />
+                        <circle
+                          cx="60"
+                          cy="60"
+                          r="52"
+                          fill="none"
+                          stroke={isMaxGold ? '#FDE047' : activeCharge > 0.72 ? '#F59E0B' : '#38BDF8'}
+                          strokeWidth={isMaxGold ? '7.5' : '6.5'}
+                          strokeLinecap="round"
+                          strokeDasharray={2 * Math.PI * 52}
+                          strokeDashoffset={2 * Math.PI * 52 * (1 - activeCharge)}
+                        />
+                      </svg>
+                    );
+                  })()}
                 </div>
 
                 {/* Chồng bài Khí Vận (!) lớn nổi bật, đứng thoáng xa bản đồ & xúc xắc */}
