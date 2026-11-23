@@ -1,22 +1,22 @@
 import type { CharacterId, LandColorOption } from '../engine/types';
 
-import standee01 from '../assets/characters/char_01_ca_phe.png';
-import standee02 from '../assets/characters/char_02_khan_ran.png';
-import standee03 from '../assets/characters/char_03_phuot_thu.png';
-import standee04 from '../assets/characters/char_04_tri_thuc.png';
-import standee05 from '../assets/characters/char_05_ao_dai_tim.png';
-import standee06 from '../assets/characters/char_06_non_la.png';
-import standee07 from '../assets/characters/char_07_doanh_nhan.png';
-import standee08 from '../assets/characters/char_08_vung_cao.png';
+import standee01 from '../assets/characters/char_01_ca_phe.webp';
+import standee02 from '../assets/characters/char_02_khan_ran.webp';
+import standee03 from '../assets/characters/char_03_phuot_thu.webp';
+import standee04 from '../assets/characters/char_04_tri_thuc.webp';
+import standee05 from '../assets/characters/char_05_ao_dai_tim.webp';
+import standee06 from '../assets/characters/char_06_non_la.webp';
+import standee07 from '../assets/characters/char_07_doanh_nhan.webp';
+import standee08 from '../assets/characters/char_08_vung_cao.webp';
 
-import avatar01 from '../assets/characters/avatars/char_01_ca_phe.png';
-import avatar02 from '../assets/characters/avatars/char_02_khan_ran.png';
-import avatar03 from '../assets/characters/avatars/char_03_phuot_thu.png';
-import avatar04 from '../assets/characters/avatars/char_04_tri_thuc.png';
-import avatar05 from '../assets/characters/avatars/char_05_ao_dai_tim.png';
-import avatar06 from '../assets/characters/avatars/char_06_non_la.png';
-import avatar07 from '../assets/characters/avatars/char_07_doanh_nhan.png';
-import avatar08 from '../assets/characters/avatars/char_08_vung_cao.png';
+import avatar01 from '../assets/characters/avatars/char_01_ca_phe.webp';
+import avatar02 from '../assets/characters/avatars/char_02_khan_ran.webp';
+import avatar03 from '../assets/characters/avatars/char_03_phuot_thu.webp';
+import avatar04 from '../assets/characters/avatars/char_04_tri_thuc.webp';
+import avatar05 from '../assets/characters/avatars/char_05_ao_dai_tim.webp';
+import avatar06 from '../assets/characters/avatars/char_06_non_la.webp';
+import avatar07 from '../assets/characters/avatars/char_07_doanh_nhan.webp';
+import avatar08 from '../assets/characters/avatars/char_08_vung_cao.webp';
 
 export interface CharacterInfo {
   id: CharacterId;

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Play } from 'lucide-react';
 import type { IGameEntry } from '@/shared/types/gameEntry';
 
@@ -9,7 +10,11 @@ interface GameCardProps {
   onSelect: (game: IGameEntry) => void;
 }
 
-export function GameCard({
+/**
+ * Thẻ Game tối ưu GPU 60fps:
+ * Dùng kích thước khung ổn định + chỉ animate `transform: scale()` (tuyệt đối KHÔNG animate width/height gây reflow trên điện thoại!)
+ */
+export const GameCard = memo(function GameCard({
   game,
   index,
   isFocused,
@@ -44,52 +49,45 @@ export function GameCard({
         animationDelay: `${index * 45}ms`,
         background: theme.borderGradient,
         boxShadow: isFocused
-          ? `0 20px 38px rgba(0, 0, 0, 0.52), 0 0 34px ${theme.glowColor}`
-          : `0 10px 20px rgba(0, 0, 0, 0.35), 0 0 10px ${theme.glowColor}`,
+          ? `0 18px 32px rgba(0, 0, 0, 0.48), 0 0 28px ${theme.glowColor}`
+          : `0 8px 18px rgba(0, 0, 0, 0.34)`,
       }}
-      className={`animate-hub-card group relative shrink-0 snap-center select-none cursor-pointer transition-all duration-300 ease-out focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-300 ${
+      className={`animate-hub-card mobile-flat-shadow group relative w-[256px] shrink-0 snap-center select-none cursor-pointer rounded-[22px] p-[3px] transition-transform duration-200 ease-out focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-300 sm:w-[272px] ${
         isFocused
-          ? 'z-10 w-[274px] -translate-y-2 rounded-[24px] p-[3.5px] sm:w-[308px]'
-          : 'w-[196px] rounded-[20px] p-[3px] opacity-92 hover:-translate-y-1 hover:opacity-100 sm:w-[214px]'
+          ? 'z-10 scale-100 -translate-y-1.5 opacity-100'
+          : 'scale-[0.86] opacity-88 hover:scale-[0.9] hover:opacity-100'
       }`}
     >
-      {/* Thân thẻ kính mờ UIverse */}
+      {/* Thân thẻ kính UIverse */}
       <div
-        className={`relative flex h-full w-full flex-col overflow-hidden border border-white/25 transition-all duration-300 ${
-          isFocused ? 'rounded-[20.5px] p-2.5 pb-3.5' : 'rounded-[17px] p-2 pb-3'
-        }`}
+        className="relative flex h-full w-full flex-col overflow-hidden rounded-[19px] border border-white/25 p-2.5 pb-3"
         style={{ background: theme.glassBackground }}
       >
-        {/* Khung ảnh bìa trò chơi (nằm gọn trong src/games/<id>/assets/) */}
-        <div
-          className={`relative w-full overflow-hidden border border-white/45 bg-stone-900/40 transition-all duration-300 ${
-            isFocused ? 'h-[264px] rounded-[15px] sm:h-[282px]' : 'h-[236px] rounded-[13px] sm:h-[248px]'
-          }`}
-        >
+        {/* Khung ảnh bìa trò chơi (cố định chiều cao — không gây reflow khi chuyển thẻ) */}
+        <div className="relative h-[238px] w-full overflow-hidden rounded-[14px] border border-white/45 bg-stone-900/40 sm:h-[260px]">
           <img
             src={game.coverUrl}
             alt={game.title}
             draggable={false}
-            className="h-full w-full object-cover object-center transition-transform duration-300 group-hover:scale-[1.04]"
+            decoding="async"
+            className="h-full w-full object-cover object-center transition-transform duration-200 group-hover:scale-[1.03]"
           />
 
-          {/* Huy hiệu trạng thái nhỏ khi thẻ thu gọn hoặc góc trên khi game chưa code đang phóng to */}
+          {/* Huy hiệu trạng thái */}
           {!isFocused ? (
             <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center">
               <div
                 className="uiverse-dome-shine relative flex items-center gap-1.5 rounded-full px-3.5 py-1 text-[11px] font-black tracking-wide text-white"
                 style={{
                   background: theme.badgeGradient,
-                  boxShadow: `0 4px 0 ${theme.badgeLipColor}, 0 8px 16px rgba(0, 0, 0, 0.38)`,
+                  boxShadow: `0 4px 0 ${theme.badgeLipColor}, 0 6px 14px rgba(0, 0, 0, 0.35)`,
                 }}
               >
                 <span
                   className="h-2 w-2 rounded-full ring-2 ring-white/90"
                   style={{ backgroundColor: theme.badgeDotColor }}
                 />
-                <span className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">
-                  {isReady ? 'ĐANG MỞ' : 'SẮP RA MẮT'}
-                </span>
+                <span>{isReady ? 'ĐANG MỞ' : 'SẮP RA MẮT'}</span>
               </div>
             </div>
           ) : (
@@ -99,7 +97,7 @@ export function GameCard({
                   className="uiverse-dome-shine relative flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-black tracking-wide text-white"
                   style={{
                     background: theme.badgeGradient,
-                    boxShadow: `0 3px 0 ${theme.badgeLipColor}, 0 6px 12px rgba(0, 0, 0, 0.38)`,
+                    boxShadow: `0 3px 0 ${theme.badgeLipColor}`,
                   }}
                 >
                   <span
@@ -113,48 +111,42 @@ export function GameCard({
           )}
         </div>
 
-        {/* Đường sáng kính phân cách ảnh và chân thẻ */}
+        {/* Đường sáng phân cách ảnh và chân thẻ */}
         <div
           className="mx-1 mt-2.5 h-[2px] rounded-full opacity-90"
           style={{ background: theme.accentGradient }}
         />
 
-        {isFocused ? (
-          /* Bất kỳ game nào được click phóng to đều hiển thị y chuẩn Cờ Tỷ Phú + nút CHƠI NGAY */
-          <div className="mt-2.5 flex flex-col items-center px-2.5">
-            <h2 className="text-center text-[22px] font-black tracking-wide text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.55)]">
-              {game.title}
-            </h2>
+        {/* Chân thẻ chiều cao ổn định tránh nhảy bố cục */}
+        <div className="mt-2.5 flex min-h-[86px] flex-col items-center justify-center px-2">
+          <h2 className="text-center text-[20px] font-black tracking-wide text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
+            {game.title}
+          </h2>
 
+          {isFocused ? (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect(game);
               }}
-              className="uiverse-push-btn uiverse-dome-shine mt-3 flex w-full items-center justify-center gap-2 rounded-full py-2.5 text-[18px] font-black tracking-wide text-white cursor-pointer"
+              className="uiverse-push-btn uiverse-dome-shine mt-2.5 flex w-full items-center justify-center gap-2 rounded-full py-2.5 text-[16px] font-black tracking-wide text-white cursor-pointer"
               style={{
                 background: theme.badgeGradient,
-                boxShadow: `0 7px 0 ${theme.badgeLipColor}, 0 12px 22px ${theme.glowColor}`,
+                boxShadow: `0 6px 0 ${theme.badgeLipColor}, 0 10px 18px ${theme.glowColor}`,
               }}
             >
-              <Play className="h-5 w-5 fill-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]" />
-              <span className="drop-shadow-[0_2px_2px_rgba(0,0,0,0.35)]">CHƠI NGAY</span>
+              <Play className="h-4 w-4 fill-white" />
+              <span>CHƠI NGAY</span>
             </button>
-          </div>
-        ) : (
-          /* Thẻ thu gọn: Tiêu đề + thanh sáng UIverse */
-          <div className="mt-2.5 flex flex-col items-center px-2">
-            <h2 className="text-center text-[17px] font-black tracking-wide text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.55)]">
-              {game.title}
-            </h2>
+          ) : (
             <div
-              className="mt-2 h-1 w-14 rounded-full"
+              className="mt-3 h-1 w-14 rounded-full"
               style={{ background: theme.accentGradient }}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
-}
+});

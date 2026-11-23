@@ -1,10 +1,10 @@
 export function DiceLogoBadge() {
   return (
     <div
-      className="relative flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1.5 pr-3.5 shadow-[0_8px_22px_rgba(0,0,0,0.28)] sm:gap-3 sm:px-3.5 sm:py-2 sm:pr-6"
+      data-testid="dice-logo-badge"
+      className="relative flex min-w-0 items-center gap-2 rounded-full px-2.5 py-1.5 pr-3.5 shadow-[0_8px_22px_rgba(0,0,0,0.28)] backdrop-blur-md sm:gap-3 sm:px-3.5 sm:py-2 sm:pr-6"
       style={{
         background: 'linear-gradient(180deg, rgba(255, 248, 236, 0.36) 0%, rgba(212, 186, 154, 0.30) 100%)',
-        backdropFilter: 'blur(12px)',
         border: '1.5px solid rgba(255, 255, 255, 0.45)',
       }}
     >

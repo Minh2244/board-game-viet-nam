@@ -5,6 +5,7 @@ import {
   Check,
   Dices,
   History,
+  Loader2,
   Map,
   Palette,
   Play,
@@ -41,6 +42,72 @@ import {
 import { GameBoardView, type OnlineGameContext } from './ui/GameBoardView';
 
 type LobbyScreenMode = 'mode-select' | 'local-setup' | 'online-lobby';
+type PersistedViewState =
+  | 'mode-select'
+  | 'local-setup'
+  | 'playing-offline'
+  | 'online-lobby'
+  | 'playing-online';
+
+const VIEW_STATE_KEY = 'bgvn_cotyphu_view_state_v1';
+
+function readPersistedViewState(): PersistedViewState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const val = window.sessionStorage.getItem(VIEW_STATE_KEY);
+    if (
+      val === 'mode-select' ||
+      val === 'local-setup' ||
+      val === 'playing-offline' ||
+      val === 'online-lobby' ||
+      val === 'playing-online'
+    ) {
+      return val;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+function writePersistedViewState(state: PersistedViewState | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (state === null) {
+      window.sessionStorage.removeItem(VIEW_STATE_KEY);
+    } else {
+      window.sessionStorage.setItem(VIEW_STATE_KEY, state);
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+function readUrlRoomCode(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const code = new URLSearchParams(window.location.search).get('room') || '';
+    return /^\d{6}$/.test(code) ? code : '';
+  } catch {
+    return '';
+  }
+}
+
+function syncRoomUrl(roomCode: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    if (roomCode) {
+      url.searchParams.set('game', 'co-ty-phu');
+      url.searchParams.set('room', roomCode);
+    } else {
+      url.searchParams.delete('room');
+    }
+    window.history.replaceState(null, '', url.pathname + url.search);
+  } catch {
+    // Ignore
+  }
+}
 
 function buildBalancedSlots(
   humanCount: number,
@@ -114,23 +181,54 @@ function buildBalancedSlots(
 const INITIAL_SLOTS: PlayerSlotDraft[] = buildBalancedSlots(1, 3);
 
 export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
-  const [screen, setScreen] = useState<LobbyScreenMode>('mode-select');
+  const initialViewRef = useRef<PersistedViewState | null>(readPersistedViewState());
+  const initialSavedOfflineRef = useRef<GameState | null>(loadOfflineGame());
+  const initialSavedOnlineRef = useRef<PersistedOnlineSession | null>(loadPersistedOnlineSession());
+  const initialUrlRoomCodeRef = useRef<string>(readUrlRoomCode());
+
+  const shouldAutoRestoreOnline = Boolean(
+    initialSavedOnlineRef.current &&
+      (initialViewRef.current === 'online-lobby' ||
+        initialViewRef.current === 'playing-online' ||
+        initialUrlRoomCodeRef.current === initialSavedOnlineRef.current.roomCode),
+  );
+
+  const [screen, setScreen] = useState<LobbyScreenMode>(() =>
+    initialViewRef.current === 'local-setup' ? 'local-setup' : 'mode-select',
+  );
   const [slots, setSlots] = useState<PlayerSlotDraft[]>(INITIAL_SLOTS);
   const [diceMode, setDiceMode] = useState<1 | 2>(2);
   const [mapMode, setMapMode] = useState<'default' | 'random'>('default');
   const [activeSlotIdx, setActiveSlotIdx] = useState(0);
 
+  // Tự mở thẳng lại bàn cờ Offline nếu người chơi vừa bấm F5 giữa ván (không văng ra Sảnh!)
   const [activeMatch, setActiveMatch] = useState<{
     state: GameState;
     key: number;
     isOnline: boolean;
-  } | null>(null);
-  const [savedMatch, setSavedMatch] = useState<GameState | null>(() => loadOfflineGame());
+  } | null>(() => {
+    if (
+      !shouldAutoRestoreOnline &&
+      initialViewRef.current === 'playing-offline' &&
+      initialSavedOfflineRef.current
+    ) {
+      return {
+        state: initialSavedOfflineRef.current,
+        key: 1,
+        isOnline: false,
+      };
+    }
+    return null;
+  });
+  const [savedMatch, setSavedMatch] = useState<GameState | null>(() => initialSavedOfflineRef.current);
 
-  // Trạng thái Phòng Online (WebRTC PeerJS + STUN/TURN + BroadcastChannel)
+  // Trạng thái Phòng Online (Vercel API /api/room + Upstash Redis HTTPS 443)
   const [myToken] = useState<string>(() => getOrCreatePlayerToken());
   const [resumableOnlineSession, setResumableOnlineSession] =
-    useState<PersistedOnlineSession | null>(() => loadPersistedOnlineSession());
+    useState<PersistedOnlineSession | null>(() => initialSavedOnlineRef.current);
+  const [autoRestoringRoomCode, setAutoRestoringRoomCode] = useState<string | null>(() =>
+    shouldAutoRestoreOnline ? initialSavedOnlineRef.current?.roomCode ?? null : null,
+  );
   const [onlineSnapshot, setOnlineSnapshot] = useState<OnlineRoomSnapshot | null>(null);
   const [onlineStatus, setOnlineStatus] = useState<OnlineTransportStatus>('CONNECTING');
   const [onlineStatusMsg, setOnlineStatusMsg] = useState('');
@@ -141,6 +239,16 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
   const remoteActionHandlerRef = useRef<((ev: RemoteGameActionEvent) => void) | null>(null);
 
   const { muted, toggleMute } = useAudioStore();
+
+  // Ghi nhớ màn hình hiện tại để khi bấm F5 luôn giữ đúng trang / đúng ván đang chơi
+  useEffect(() => {
+    if (autoRestoringRoomCode) return;
+    if (activeMatch) {
+      writePersistedViewState(activeMatch.isOnline ? 'playing-online' : 'playing-offline');
+    } else {
+      writePersistedViewState(screen);
+    }
+  }, [activeMatch, screen, autoRestoringRoomCode]);
 
   // Giữ nhạc nền lễ hội 124 BPM phát vui tươi xuyên suốt màn Chọn Chế Độ & Phòng Chờ; tắt khi bước vào ván cờ
   useEffect(() => {
@@ -181,6 +289,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
       }
       onlineClientRef.current = null;
     }
+    syncRoomUrl(null);
     setOnlineSnapshot(null);
     setOnlineLoading(false);
     setResumableOnlineSession(loadPersistedOnlineSession());
@@ -197,7 +306,8 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
         callbacks: {
           onSnapshot: (snap) => {
             setOnlineSnapshot(snap);
-            // Tự động mở bàn cờ trên máy Khách ngay khi Chủ phòng bấm BẮT ĐẦU (hoặc khi reconnect vào ván đang chơi)
+            syncRoomUrl(snap.roomCode);
+            // Tự động mở bàn cờ trên máy Khách ngay khi Chủ phòng bấm BẮT ĐẦU (hoặc khi F5 vào lại ván đang chơi)
             if (snap.phase === 'PLAYING' && snap.matchState) {
               setActiveMatch((prev) => {
                 if (prev?.isOnline) return prev;
@@ -219,10 +329,12 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           },
           onRoomClosed: (reason) => {
             onlineClientRef.current = null;
+            syncRoomUrl(null);
             setOnlineSnapshot(null);
             setActiveMatch((prev) => (prev?.isOnline ? null : prev));
             setScreen('mode-select');
             setOnlineLoading(false);
+            setAutoRestoringRoomCode(null);
             setOnlineError(reason);
             setResumableOnlineSession(null);
           },
@@ -237,15 +349,60 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     [myToken],
   );
 
+  // Tự động khôi phục phòng Online ngay sau khi bấm F5 (dùng được cho cả Chủ phòng lẫn Khách — KHÔNG VĂNG!)
+  useEffect(() => {
+    const saved = initialSavedOnlineRef.current;
+    if (!shouldAutoRestoreOnline || !saved) return;
+
+    let cancelled = false;
+    const client = createOnlineClient(saved.roomCode, saved.playerName, saved.isHost);
+    void client
+      .rejoinExistingRoom()
+      .then((restoredSnap) => {
+        if (cancelled) return;
+        setScreen('online-lobby');
+        if (restoredSnap.phase === 'PLAYING' && restoredSnap.matchState) {
+          setActiveMatch({
+            state: restoredSnap.matchState,
+            key: Date.now(),
+            isOnline: true,
+          });
+        }
+        setAutoRestoringRoomCode(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        client.destroy();
+        onlineClientRef.current = null;
+        clearPersistedOnlineSession();
+        syncRoomUrl(null);
+        setResumableOnlineSession(null);
+        setAutoRestoringRoomCode(null);
+        setScreen('mode-select');
+        setOnlineError(
+          err instanceof Error ? err.message : 'Phòng Online trước đó đã đóng hoặc hết hạn.',
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleCreateOnlineRoom = async (playerName: string) => {
     setOnlineError(null);
     setOnlineLoading(true);
     const code = generateRoomCode6Digits();
     const client = createOnlineClient(code, playerName, true);
     try {
-      await client.startAsHost(2); // Mặc định gợi ý 2 Máy (Chủ phòng chỉnh tự do 0..4 ngay trong sảnh)
+      const confirmedCode = await client.startAsHost(2); // Chỉ mở sảnh khi máy chủ đã cấp mã 6 số thành công 100%!
+      syncRoomUrl(confirmedCode);
       setScreen('online-lobby');
     } catch (err) {
+      client.destroy();
+      onlineClientRef.current = null;
+      setOnlineSnapshot(null);
       setOnlineError(err instanceof Error ? err.message : 'Không thể khởi tạo phòng Online.');
     } finally {
       setOnlineLoading(false);
@@ -258,6 +415,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     const client = createOnlineClient(roomCode, playerName, false);
     try {
       await client.joinRoom();
+      syncRoomUrl(roomCode);
       setScreen('online-lobby');
     } catch (err) {
       client.destroy();
@@ -276,20 +434,20 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     const { roomCode, playerName, isHost } = resumableOnlineSession;
     const client = createOnlineClient(roomCode, playerName, isHost);
     try {
-      if (isHost) {
-        await client.startAsHost(0);
-        setScreen('online-lobby');
-      } else {
-        await client.joinRoom();
-        setScreen('online-lobby');
+      const restored = await client.rejoinExistingRoom();
+      syncRoomUrl(roomCode);
+      setScreen('online-lobby');
+      if (restored.phase === 'PLAYING' && restored.matchState) {
+        setActiveMatch({ state: restored.matchState, key: Date.now(), isOnline: true });
       }
     } catch (err) {
       client.destroy();
       onlineClientRef.current = null;
       clearPersistedOnlineSession();
+      syncRoomUrl(null);
       setResumableOnlineSession(null);
       setOnlineError(
-        err instanceof Error ? err.message : 'Phòng cũ đã đóng hoặc quá hạn 2 phút.',
+        err instanceof Error ? err.message : 'Phòng cũ đã đóng hoặc quá hạn.',
       );
     } finally {
       setOnlineLoading(false);
@@ -348,6 +506,23 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     setActiveMatch((prev) => ({ state: savedMatch, key: (prev?.key ?? 0) + 1, isOnline: false }));
   };
 
+  // 0. ĐANG TỰ KHÔI PHỤC PHÒNG ONLINE NGAY SAU KHI F5
+  if (autoRestoringRoomCode) {
+    return (
+      <div className="relative flex h-full w-full items-center justify-center bg-slate-950 p-6 text-white">
+        <div className="flex flex-col items-center gap-3 rounded-3xl border border-cyan-400/45 bg-slate-900/90 px-8 py-6 text-center shadow-2xl">
+          <Loader2 className="h-9 w-9 animate-spin text-cyan-300" />
+          <div className="text-base font-black tracking-wide text-amber-200">
+            Đang khôi phục phòng Online #{autoRestoringRoomCode}...
+          </div>
+          <div className="text-xs text-slate-300">
+            Giữ nguyên ghế &amp; bàn cờ của bạn, chờ xíu nhé!
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // 1. ĐANG TRONG VÁN CỜ (OFFLINE HOẶC ONLINE)
   if (activeMatch) {
     let onlineContext: OnlineGameContext | undefined;
@@ -389,11 +564,13 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
       <ModeSelectView
         savedOfflineMatch={savedMatch}
         resumableOnlineSession={resumableOnlineSession}
+        initialRoomCode={initialUrlRoomCodeRef.current}
         onlineLoading={onlineLoading}
         onlineError={onlineError}
         defaultPlayerName={slots[0]?.name || 'Bạn 1'}
         onBackToHub={() => {
           cleanupOnlineClient();
+          writePersistedViewState(null);
           onExitToHub();
         }}
         onOpenLocalSetup={(preset) => {
@@ -460,30 +637,30 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
 
   const handleSetHumanCount = (nextHumans: number) => {
     soundEngine.playPushClick();
-    setSlots((prev) => {
-      const curBots = prev.filter((s) => s.isBot).length;
-      const balanced = buildBalancedSlots(nextHumans, curBots, prev);
-      if (activeSlotIdx >= balanced.length) setActiveSlotIdx(balanced.length - 1);
-      return balanced;
-    });
+    const curBots = slots.filter((s) => s.isBot).length;
+    const balanced = buildBalancedSlots(nextHumans, curBots, slots);
+    setSlots(balanced);
+    if (activeSlotIdx >= balanced.length) {
+      setActiveSlotIdx(balanced.length - 1);
+    }
   };
 
   const handleSetBotCount = (nextBots: number) => {
     soundEngine.playPushClick();
-    setSlots((prev) => {
-      const curHumans = prev.filter((s) => !s.isBot).length;
-      // Nếu tổng vượt quá 6 -> tự giảm Số Người cho khớp tổng <= 6; nếu tổng < 2 -> tăng Số Người lên 2
-      let adjustedHumans = curHumans;
-      if (adjustedHumans + nextBots > 6) {
-        adjustedHumans = Math.max(1, 6 - nextBots);
-      }
-      if (adjustedHumans + nextBots < 2) {
-        adjustedHumans = 2;
-      }
-      const balanced = buildBalancedSlots(adjustedHumans, nextBots, prev);
-      if (activeSlotIdx >= balanced.length) setActiveSlotIdx(balanced.length - 1);
-      return balanced;
-    });
+    const curHumans = slots.filter((s) => !s.isBot).length;
+    // Nếu tổng vượt quá 6 -> tự giảm Số Người cho khớp tổng <= 6; nếu tổng < 2 -> tăng Số Người lên 2
+    let adjustedHumans = curHumans;
+    if (adjustedHumans + nextBots > 6) {
+      adjustedHumans = Math.max(1, 6 - nextBots);
+    }
+    if (adjustedHumans + nextBots < 2) {
+      adjustedHumans = 2;
+    }
+    const balanced = buildBalancedSlots(adjustedHumans, nextBots, slots);
+    setSlots(balanced);
+    if (activeSlotIdx >= balanced.length) {
+      setActiveSlotIdx(balanced.length - 1);
+    }
   };
 
   const updateActiveSlotName = (name: string) => {
@@ -534,9 +711,9 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
         className="pointer-events-none absolute inset-0 bg-gradient-to-br from-stone-950/65 via-emerald-950/55 to-stone-950/75"
       />
 
-      <div className="relative z-10 flex min-h-full w-full flex-row items-start justify-between gap-4 px-5 py-4">
-        {/* Nút Quay lại chọn chế độ & nút Loa sát góc trên bên trái */}
-        <header className="flex shrink-0 flex-col gap-2">
+      <div className="relative z-10 flex min-h-full w-full flex-col items-stretch justify-between gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:flex-row lg:items-start lg:gap-4">
+        {/* Nút Quay lại chọn chế độ & nút Loa */}
+        <header className="flex shrink-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-stretch">
           <button
             type="button"
             onClick={() => {
@@ -565,9 +742,9 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
         </header>
 
         {/* Thiết lập ván chơi Offline (Gom chung Chơi Với Máy & 1 Thiết Bị Nhiều Người) */}
-        <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-12 gap-5">
+        <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
           {/* Cột trái: Bộ chọn Số Người (1–6) + Số Máy (0–4) + Danh sách tụ + Cài đặt */}
-          <section className="col-span-7 flex flex-col gap-3 rounded-[26px] border border-emerald-400/40 bg-stone-900/80 p-5 shadow-2xl backdrop-blur-md">
+          <section className="mobile-flat-shadow flex flex-col gap-3 rounded-[24px] border border-emerald-400/40 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-7">
             <div className="border-b border-white/10 pb-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -583,7 +760,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
               </div>
 
               {/* 2 BỘ NÚT TÁCH RIÊNG: SỐ NGƯỜI (1–6) & SỐ MÁY (0–4) */}
-              <div className="mt-3 grid grid-cols-2 gap-2.5">
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-2.5">
                 <div className="flex items-center justify-between gap-1.5 rounded-2xl border border-emerald-400/30 bg-black/40 px-3 py-1.5">
                   <span className="inline-flex shrink-0 items-center gap-1 text-xs font-black text-emerald-300">
                     <User className="h-3.5 w-3.5" />
@@ -793,7 +970,7 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           </section>
 
           {/* Cột phải: Tùy chỉnh Tên tụ + Màu đất + Nhân vật Chibi */}
-          <section className="col-span-5 flex flex-col justify-between gap-2.5 rounded-[26px] border border-amber-300/35 bg-stone-900/80 p-5 shadow-2xl backdrop-blur-md">
+          <section className="mobile-flat-shadow flex flex-col justify-between gap-2.5 rounded-[24px] border border-amber-300/35 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-5">
             <div className="w-full text-center">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-amber-200">
                 <span

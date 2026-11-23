@@ -113,7 +113,7 @@ export function OnlineLobbyView({
         className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-950/76 via-cyan-950/55 to-stone-950/82"
       />
 
-      <div className="relative z-10 flex min-h-full w-full flex-col gap-3 px-5 py-3.5">
+      <div className="relative z-10 flex min-h-full w-full flex-col gap-3 px-3 py-3 sm:px-5 sm:py-3.5">
         {/* Thanh đầu phòng: Rời phòng + Mã 6 chữ số cỡ lớn + Trạng thái kết nối */}
         <header className="mx-auto flex w-full max-w-[1140px] flex-wrap items-center justify-between gap-3">
           <button
@@ -177,10 +177,10 @@ export function OnlineLobbyView({
           </div>
         </header>
 
-        {/* SẢNH PHÒNG CHỜ ONLINE 2 CỘT */}
-        <main className="mx-auto grid w-full max-w-[1140px] flex-1 grid-cols-12 gap-5">
+        {/* SẢNH PHÒNG CHỜ ONLINE 2 CỘT (1 cột gọn trên điện thoại dọc) */}
+        <main className="mx-auto grid w-full max-w-[1140px] flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-5">
           {/* CỘT TRÁI (7 CỘT): GHẾ NGƯỜI + MÁY (0–4) + CÀI ĐẶT + NÚT BẮT ĐẦU */}
-          <section className="col-span-7 flex flex-col gap-3.5 rounded-[26px] border border-cyan-400/45 bg-slate-900/84 p-5 shadow-2xl backdrop-blur-md">
+          <section className="mobile-flat-shadow flex flex-col gap-3.5 rounded-[24px] border border-cyan-400/45 bg-slate-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-7">
             {/* Thanh tiêu đề & Bộ chọn Số Máy (0–4) */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
               <div>
@@ -228,7 +228,7 @@ export function OnlineLobbyView({
             </div>
 
             {/* Lưới 6 ghế (Người đã vào + Máy + Ghế trống chờ bạn bè) */}
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {allActiveMembers.map((member) => {
                 const charInfo =
                   CO_TY_PHU_CHARACTERS.find((c) => c.id === member.characterId) ??
@@ -444,7 +444,7 @@ export function OnlineLobbyView({
 
           {/* CỘT PHẢI (5 CỘT): TÙY CHỈNH TÊN + MÀU ĐẤT + NHÂN VẬT CHIBI REALTIME */}
           {editableMember && (
-            <section className="col-span-5 flex flex-col justify-between gap-2.5 rounded-[26px] border border-amber-300/35 bg-stone-900/82 p-5 shadow-2xl backdrop-blur-md">
+            <section className="mobile-flat-shadow flex flex-col justify-between gap-2.5 rounded-[24px] border border-amber-300/35 bg-stone-900/90 p-4 shadow-2xl backdrop-blur-md sm:rounded-[26px] sm:p-5 lg:col-span-5">
               <div className="w-full text-center">
                 <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-bold text-amber-200">
                   <span
@@ -462,7 +462,7 @@ export function OnlineLobbyView({
               <div className="relative my-0.5 flex h-36 w-full items-end justify-center">
                 <div
                   aria-hidden="true"
-                  className="absolute bottom-1 h-6 w-32 rounded-full blur-md"
+                  className="smooth-hide-blur absolute bottom-1 h-6 w-32 rounded-full blur-md"
                   style={{ backgroundColor: selectedLandColor.hex, opacity: 0.55 }}
                 />
                 <img

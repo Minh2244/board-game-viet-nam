@@ -11,7 +11,10 @@ interface HorizontalGameShelfProps {
 export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelfProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const programmaticUntilRef = useRef(0);
+  const scrollRafRef = useRef(0);
   const [activeIndex, setActiveIndex] = useState(0);
+  const activeIndexRef = useRef(0);
+  activeIndexRef.current = activeIndex;
   const [isDragging, setIsDragging] = useState(false);
 
   const dragState = useRef({
@@ -46,32 +49,47 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
     [games.length],
   );
 
+  // Tối ưu cuộn 60fps bằng requestAnimationFrame — không gây layout thrashing trên điện thoại
   useEffect(() => {
     const container = scrollerRef.current;
     if (!container) return;
 
     const handleScroll = () => {
       if (Date.now() < programmaticUntilRef.current) return;
-      if (container.scrollWidth <= container.clientWidth + 4) return;
-      const viewCenter = container.scrollLeft + container.clientWidth / 2;
-      let nearest = 0;
-      let bestDist = Infinity;
-      container.querySelectorAll<HTMLElement>('[data-card-index]').forEach((el, idx) => {
-        const c = el.offsetLeft + el.offsetWidth / 2;
-        const dist = Math.abs(c - viewCenter);
-        if (dist < bestDist) {
-          bestDist = dist;
-          nearest = idx;
+      if (scrollRafRef.current) return;
+
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = 0;
+        if (container.scrollWidth <= container.clientWidth + 4) return;
+        const viewCenter = container.scrollLeft + container.clientWidth / 2;
+        let nearest = 0;
+        let bestDist = Infinity;
+        const cards = container.querySelectorAll<HTMLElement>('[data-card-index]');
+        for (let idx = 0; idx < cards.length; idx += 1) {
+          const el = cards[idx];
+          const c = el.offsetLeft + el.offsetWidth / 2;
+          const dist = Math.abs(c - viewCenter);
+          if (dist < bestDist) {
+            bestDist = dist;
+            nearest = idx;
+          }
+        }
+        if (nearest !== activeIndexRef.current) {
+          setActiveIndex(nearest);
         }
       });
-      setActiveIndex(nearest);
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
-    return () => container.removeEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+    };
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Trên màn hình cảm ứng (touch), để trình duyệt vuốt native 60fps thay vì ghi đè bằng JS!
+    if (e.pointerType === 'touch') return;
     const container = scrollerRef.current;
     if (!container || container.scrollWidth <= container.clientWidth + 4) return;
     dragState.current = {
@@ -110,20 +128,26 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
     }
   };
 
-  const handleCardFocus = (idx: number) => {
-    if (dragState.current.movedDistance > 12) return;
-    soundEngine.playCarouselStep();
-    focusAndScrollToCard(idx);
-  };
+  const handleCardFocus = useCallback(
+    (idx: number) => {
+      if (dragState.current.movedDistance > 12) return;
+      soundEngine.playCarouselStep();
+      focusAndScrollToCard(idx);
+    },
+    [focusAndScrollToCard],
+  );
 
-  const handleCardSelect = (game: IGameEntry) => {
-    if (dragState.current.movedDistance > 12) return;
-    onSelectGame(game);
-  };
+  const handleCardSelect = useCallback(
+    (game: IGameEntry) => {
+      if (dragState.current.movedDistance > 12) return;
+      onSelectGame(game);
+    },
+    [onSelectGame],
+  );
 
   return (
     <div className="relative flex w-full max-w-full min-w-0 flex-col items-center">
-      {/* Dải thẻ ngang UIverse — bấm thẻ nào thẻ đó phóng to nổi bật kèm nút CHƠI NGAY */}
+      {/* Dải thẻ ngang UIverse — trên điện thoại dùng vuốt native 60fps, trên PC kéo chuột mượt */}
       <div
         ref={scrollerRef}
         onPointerDown={handlePointerDown}
@@ -132,12 +156,14 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
         onPointerLeave={endDrag}
         onPointerCancel={endDrag}
         onWheel={handleWheel}
-        className={`no-scrollbar w-full min-w-0 snap-x snap-mandatory overflow-x-auto py-5 ${
+        className={`no-scrollbar w-full min-w-0 snap-x snap-mandatory overflow-x-auto touch-pan-x py-4 sm:py-5 ${
           isDragging ? 'cursor-grabbing' : ''
         }`}
-        style={{ scrollBehavior: isDragging ? 'auto' : 'smooth' }}
+        style={{
+          scrollBehavior: isDragging ? 'auto' : 'smooth',
+        }}
       >
-        <div className="flex w-max min-w-full items-center justify-center gap-4 px-[calc(50%-137px)] sm:gap-5 sm:px-6 lg:px-8">
+        <div className="flex w-max min-w-full items-center justify-center gap-2 px-[calc(50%-128px)] sm:gap-3 sm:px-6 lg:px-8">
           {games.map((game, idx) => (
             <GameCard
               key={game.id}
@@ -151,8 +177,8 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
         </div>
       </div>
 
-      {/* Thanh chấm chỉ báo 5 game kiểu UIverse */}
-      <div className="mt-1 flex items-center gap-2.5 rounded-full border border-white/30 bg-slate-900/90 px-4 py-2 shadow-[0_6px_16px_rgba(0,0,0,0.45)] backdrop-blur-md">
+      {/* Thanh chấm chỉ báo 5 game */}
+      <div className="mt-1 flex items-center gap-2.5 rounded-full border border-white/30 bg-slate-900/92 px-4 py-2 shadow-[0_6px_16px_rgba(0,0,0,0.42)] backdrop-blur-md">
         {games.map((game, idx) => {
           const isCurrent = idx === activeIndex;
           return (
@@ -168,7 +194,7 @@ export function HorizontalGameShelf({ games, onSelectGame }: HorizontalGameShelf
               style={{
                 width: isCurrent ? '34px' : '10px',
                 background: game.theme.accentGradient,
-                boxShadow: isCurrent ? `0 0 12px ${game.theme.glowColor}` : 'none',
+                boxShadow: isCurrent ? `0 0 10px ${game.theme.glowColor}` : 'none',
                 opacity: isCurrent ? 1 : 0.82,
               }}
             />

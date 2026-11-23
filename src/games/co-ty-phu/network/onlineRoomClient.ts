@@ -1,37 +1,13 @@
-import Peer, { type DataConnection } from 'peerjs';
 import { cryptoRandomInt } from '@/shared/crypto/random';
 import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from '../data/characters';
 import { createInitialGameState } from '../engine/reducer';
 import type { CharacterId, GameAction, GameState, LandColorId, PlayerSlotDraft } from '../engine/types';
 
 export const ONLINE_DISCONNECT_GRACE_MS = 120_000; // 2 phút chờ kết nối lại trước khi Máy đánh thay
-const SESSION_STORAGE_KEY = 'bgvn_cotyphu_online_session_v1';
-const HEARTBEAT_INTERVAL_MS = 3_000;
-const HEARTBEAT_TIMEOUT_MS = 10_000;
-const ROOM_PEER_PREFIX = 'bgvn-ctp-';
-
-// Máy chủ STUN/TURN công cộng hỗ trợ kết nối xuyên NAT (Wi-Fi nhà, 4G/5G Viettel/VNPT/Mobifone khác mạng)
-const CROSS_NETWORK_ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-  {
-    urls: 'turn:openrelay.metered.ca:80',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-  {
-    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-    username: 'openrelayproject',
-    credential: 'openrelayproject',
-  },
-];
+const GAME_NAMESPACE = 'co-ty-phu';
+const SESSION_STORAGE_KEY = 'bgvn_cotyphu_online_session_v2';
+const HEARTBEAT_INTERVAL_MS = 10_000; // Nhịp tim gia hạn TTL trượt & kiểm tra kết nối
+const DISCONNECT_THRESHOLD_MS = 26_000; // Mất 2.6 nhịp tim mới đánh dấu tạm mất mạng
 
 export interface OnlineRoomMember {
   playerToken: string;
@@ -124,24 +100,6 @@ type WirePacket =
   | {
       msgId: string;
       senderToken: string;
-      type: 'HOST_REHYDRATE';
-      snapshot: OnlineRoomSnapshot;
-    }
-  | {
-      msgId: string;
-      senderToken: string;
-      type: 'PING';
-      sentAt: number;
-    }
-  | {
-      msgId: string;
-      senderToken: string;
-      type: 'PONG';
-      sentAt: number;
-    }
-  | {
-      msgId: string;
-      senderToken: string;
       type: 'LEAVE_ROOM';
       playerToken: string;
     }
@@ -158,6 +116,29 @@ type WirePacket =
       type: 'DISSOLVE_ROOM';
       reason: string;
     };
+
+interface ApiEventRow {
+  seq: number;
+  sentAt: number;
+  senderToken: string;
+  packet: WirePacket;
+}
+
+interface ApiRoomResponse {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  unchanged?: boolean;
+  rejoined?: boolean;
+  roomCode?: string;
+  phase?: 'LOBBY' | 'PLAYING' | 'DISSOLVED';
+  hostToken?: string;
+  seq?: number;
+  snapshot?: OnlineRoomSnapshot | null;
+  heartbeats?: Record<string, number>;
+  events?: ApiEventRow[];
+  storageMode?: 'upstash' | 'memory';
+}
 
 function generateRandomId(prefix: string): string {
   const bytes = new Uint8Array(6);
@@ -201,7 +182,8 @@ export function loadPersistedOnlineSession(): PersistedOnlineSession | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedOnlineSession;
     if (!parsed?.roomCode || !parsed?.playerToken) return null;
-    if (Date.now() - parsed.savedAt > ONLINE_DISCONNECT_GRACE_MS) {
+    // Cho phép tự khôi phục trong 30 phút (trùng với TTL phòng trên Redis)
+    if (Date.now() - parsed.savedAt > 30 * 60 * 1000) {
       window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
@@ -259,6 +241,43 @@ function buildBotsArray(
   return result;
 }
 
+async function apiPostRoom(body: Record<string, unknown>): Promise<{ status: number; data: ApiRoomResponse }> {
+  const res = await fetch('/api/room', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  let data: ApiRoomResponse = {};
+  try {
+    data = (await res.json()) as ApiRoomResponse;
+  } catch {
+    data = { ok: false, message: `Lỗi máy chủ (${res.status}).` };
+  }
+  return { status: res.status, data };
+}
+
+async function apiGetRoom(
+  code: string,
+  sinceSeq: number,
+  full = false,
+): Promise<{ status: number; data: ApiRoomResponse }> {
+  const qs = new URLSearchParams({
+    game: GAME_NAMESPACE,
+    code,
+    sinceSeq: String(sinceSeq),
+  });
+  if (full) qs.set('full', '1');
+  const res = await fetch(`/api/room?${qs.toString()}`, { cache: 'no-store' });
+  let data: ApiRoomResponse = {};
+  try {
+    data = (await res.json()) as ApiRoomResponse;
+  } catch {
+    data = { ok: false, message: `Lỗi máy chủ (${res.status}).` };
+  }
+  return { status: res.status, data };
+}
+
 export interface OnlineRoomCallbacks {
   onSnapshot: (snapshot: OnlineRoomSnapshot) => void;
   onStatusChange: (status: OnlineTransportStatus, message: string) => void;
@@ -267,27 +286,32 @@ export interface OnlineRoomCallbacks {
   onPeerJoined?: (memberName: string) => void;
 }
 
+/**
+ * Kết nối phòng Online qua Vercel Serverless API (/api/room) + Upstash Redis (HTTPS 443).
+ * - Xuyên 100% mạng 4G/5G/Wi-Fi Việt Nam, không lỗi WebRTC NAT/TURN.
+ * - Mã 6 số duy nhất nguyên tử (HSETNX), không bao giờ trùng.
+ * - Tự gia hạn TTL trượt khi còn hoạt động, hỗ trợ F5 khôi phục thẳng bàn cờ (cả Chủ lẫn Khách).
+ */
 export class OnlineRoomClient {
-  public readonly roomCode: string;
+  public roomCode: string;
   public readonly playerToken: string;
-  public readonly isHost: boolean;
+  public isHost: boolean;
 
   private callbacks: OnlineRoomCallbacks;
-  private peer: Peer | null = null;
-  private hostConn: DataConnection | null = null;
-  private guestConns = new Map<string, DataConnection>(); // playerToken -> DataConnection
-  private broadcastChannel: BroadcastChannel | null = null;
   private seenMsgIds = new Set<string>();
   private seenActionIds = new Set<string>();
-  private lastSeenMap = new Map<string, number>(); // playerToken -> epoch ms
+  private lastSeenMap = new Map<string, number>();
+  private lastSeq = 0;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private graceCheckTimer: ReturnType<typeof setInterval> | null = null;
-  private reconnectTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
+  private consecutivePollErrors = 0;
   private destroyed = false;
   private snapshot: OnlineRoomSnapshot | null = null;
   private localName: string;
-  private cloudReady = false;
   private joinResolved = false;
+  private visibilityHandler: (() => void) | null = null;
 
   constructor(options: {
     roomCode: string;
@@ -307,13 +331,9 @@ export class OnlineRoomClient {
     return this.snapshot;
   }
 
-  public isCloudOnline(): boolean {
-    return this.cloudReady;
-  }
-
-  /** Khởi tạo phòng mới với vai trò Chủ phòng (mã 6 chữ số) */
-  public async startAsHost(initialBotCount = 2): Promise<void> {
-    this.callbacks.onStatusChange('CONNECTING', 'Đang khởi tạo phòng Online...');
+  /** Khởi tạo phòng mới trên máy chủ — chỉ trả về khi đã cấp mã 6 số thành công 100% */
+  public async startAsHost(initialBotCount = 2): Promise<string> {
+    this.callbacks.onStatusChange('CONNECTING', 'Đang khởi tạo phòng trên máy chủ...');
 
     const hostMember: OnlineRoomMember = {
       playerToken: this.playerToken,
@@ -329,8 +349,7 @@ export class OnlineRoomClient {
     };
 
     const bots = buildBotsArray(initialBotCount, [], [hostMember]);
-
-    this.snapshot = {
+    const draftSnapshot: OnlineRoomSnapshot = {
       roomCode: this.roomCode,
       phase: 'LOBBY',
       hostToken: this.playerToken,
@@ -344,55 +363,143 @@ export class OnlineRoomClient {
       updatedAt: Date.now(),
     };
 
+    const { status, data } = await apiPostRoom({
+      action: 'create',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
+      senderToken: this.playerToken,
+      snapshot: draftSnapshot,
+    });
+
+    if (status !== 200 || !data.ok || !data.roomCode) {
+      const msg = data.message || 'Không thể kết nối máy chủ tạo phòng Online. Vui lòng thử lại!';
+      this.callbacks.onStatusChange('ERROR', msg);
+      throw new Error(msg);
+    }
+
+    this.roomCode = data.roomCode;
+    this.lastSeq = data.seq ?? 1;
+    this.snapshot = (data.snapshot as OnlineRoomSnapshot) ?? { ...draftSnapshot, roomCode: this.roomCode };
+    this.joinResolved = true;
+
     this.persistSession();
+    this.callbacks.onStatusChange(
+      'READY',
+      data.storageMode === 'upstash'
+        ? 'Trực tuyến · Sẵn sàng kết nối khác mạng 4G/Wi-Fi'
+        : 'Trực tuyến · Máy chủ phòng cục bộ sẵn sàng',
+    );
     this.emitSnapshot();
-    this.setupBroadcastChannel();
-    this.setupHostPeer();
-    this.startTimers();
+    this.startSyncLoops();
+    return this.roomCode;
   }
 
-  /** Tham gia phòng đã tồn tại bằng mã 6 chữ số */
+  /** Tham gia phòng đã tồn tại bằng mã 6 chữ số (phát hiện sai mã tức thì < 200ms) */
   public async joinRoom(): Promise<void> {
     this.callbacks.onStatusChange('CONNECTING', `Đang tìm phòng #${this.roomCode}...`);
-    this.persistSession();
-    this.setupBroadcastChannel();
 
-    // Gửi yêu cầu vào phòng qua BroadcastChannel tức thì (hỗ trợ test đa tab 0ms)
-    this.sendBroadcast({
-      msgId: generateRandomId('msg'),
+    const joinPacket: WirePacket = {
+      msgId: generateRandomId('join'),
       senderToken: this.playerToken,
       type: 'JOIN_REQUEST',
       roomCode: this.roomCode,
       playerToken: this.playerToken,
       name: this.localName,
+    };
+
+    const { status, data } = await apiPostRoom({
+      action: 'join',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
+      senderToken: this.playerToken,
+      packet: joinPacket,
     });
 
-    // Đồng thời mở kết nối PeerJS Cloud WebRTC xuyên mạng (Wi-Fi / 4G khác nhau)
-    this.setupGuestPeer();
-    this.startTimers();
+    if (status !== 200 || !data.ok) {
+      const msg =
+        data.message ||
+        `Không tìm thấy phòng #${this.roomCode}. Kiểm tra lại mã 6 số hoặc đảm bảo Chủ phòng đang mở phòng.`;
+      this.callbacks.onStatusChange('ERROR', msg);
+      throw new Error(msg);
+    }
 
-    // Kiểm tra timeout nếu sau 9 giây không tìm thấy phòng trên cả Broadcast lẫn Cloud
+    this.lastSeq = data.seq ?? 0;
+    this.ingestHeartbeats(data.heartbeats);
+
+    // Nếu là thành viên cũ quay lại (F5 / rớt mạng vào lại) -> vào thẳng phòng/bàn cờ ngay lập tức!
+    if (data.rejoined && data.snapshot) {
+      this.isHost = data.hostToken === this.playerToken;
+      this.snapshot = data.snapshot;
+      this.joinResolved = true;
+      this.persistSession();
+      this.callbacks.onStatusChange('READY', `Đã khôi phục phòng #${this.roomCode}`);
+      this.emitSnapshot();
+      this.startSyncLoops();
+      return;
+    }
+
+    // Khách mới: đã gửi JOIN_REQUEST lên máy chủ, bắt đầu poll nhanh để nhận ROOM_SNAPSHOT từ Chủ phòng
+    this.persistSession();
+    this.startSyncLoops();
+
     return new Promise<void>((resolve, reject) => {
       const started = Date.now();
-      const poll = setInterval(() => {
+      const waitTimer = setInterval(() => {
         if (this.destroyed) {
-          clearInterval(poll);
-          reject(new Error('Đã hủy kết nối phòng.'));
+          clearInterval(waitTimer);
+          reject(new Error('Kết nối phòng đã bị đóng.'));
           return;
         }
         if (this.joinResolved && this.snapshot) {
-          clearInterval(poll);
+          clearInterval(waitTimer);
           resolve();
           return;
         }
-        if (Date.now() - started > 9500) {
-          clearInterval(poll);
-          const msg = `Không tìm thấy phòng #${this.roomCode}. Kiểm tra lại mã 6 số hoặc đảm bảo Chủ phòng đang mở phòng.`;
+        if (Date.now() - started > 12_000) {
+          clearInterval(waitTimer);
+          const msg = `Phòng #${this.roomCode} tồn tại nhưng Chủ phòng đang không phản hồi. Hãy kiểm tra kết nối của Chủ phòng.`;
           this.callbacks.onStatusChange('ERROR', msg);
           reject(new Error(msg));
         }
-      }, 150);
+      }, 140);
     });
+  }
+
+  /** Tự động khôi phục phòng ngay sau khi bấm F5 (dùng cho cả Chủ phòng lẫn Khách!) */
+  public async rejoinExistingRoom(): Promise<OnlineRoomSnapshot> {
+    this.callbacks.onStatusChange('RECONNECTING', `Đang khôi phục phòng #${this.roomCode}...`);
+
+    const { status, data } = await apiPostRoom({
+      action: 'rejoin',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
+      senderToken: this.playerToken,
+    });
+
+    if (status !== 200 || !data.ok || !data.snapshot) {
+      const msg = data.message || `Phòng #${this.roomCode} đã đóng hoặc hết thời gian chờ.`;
+      clearPersistedOnlineSession();
+      this.callbacks.onStatusChange('ERROR', msg);
+      throw new Error(msg);
+    }
+
+    this.isHost = data.hostToken === this.playerToken;
+    this.snapshot = data.snapshot;
+    this.lastSeq = data.seq ?? 0;
+    this.joinResolved = true;
+    this.ingestHeartbeats(data.heartbeats);
+    this.persistSession();
+
+    this.callbacks.onStatusChange('READY', `Đã khôi phục phòng #${this.roomCode}`);
+    this.emitSnapshot();
+    this.startSyncLoops();
+
+    // Chủ phòng đồng bộ snapshot mới nhất để các máy khác thấy ngay trạng thái trực tuyến
+    if (this.isHost) {
+      this.broadcastSnapshot();
+    }
+
+    return this.snapshot;
   }
 
   private persistSession(): void {
@@ -405,266 +512,183 @@ export class OnlineRoomClient {
     });
   }
 
-  private setupBroadcastChannel(): void {
-    if (typeof BroadcastChannel === 'undefined') return;
-    try {
-      this.broadcastChannel = new BroadcastChannel(`bgvn_cotyphu_room_${this.roomCode}`);
-      this.broadcastChannel.onmessage = (ev: MessageEvent<WirePacket>) => {
-        if (this.destroyed || !ev.data) return;
-        this.handleIncomingPacket(ev.data, null);
-      };
-    } catch {
-      this.broadcastChannel = null;
-    }
+  private getAdaptivePollIntervalMs(): number {
+    if (!this.joinResolved) return 420; // Đang chờ duyệt vào phòng -> poll cực nhanh < 0.5s
+    if (typeof document !== 'undefined' && document.hidden) return 4800; // Ẩn tab -> tiết kiệm quota Redis tối đa
+    if (this.snapshot?.phase === 'PLAYING') return 1100; // Đang trong ván -> phản hồi nhanh ~1s
+    return 1900; // Đang ở sảnh phòng chờ -> nhẹ nhàng ~1.9s
   }
 
-  private setupHostPeer(): void {
-    const peerId = `${ROOM_PEER_PREFIX}${this.roomCode}`;
-    try {
-      const peer = new Peer(peerId, {
-        debug: 0,
-        config: {
-          iceServers: CROSS_NETWORK_ICE_SERVERS,
-        },
-      });
-      this.peer = peer;
+  private startSyncLoops(): void {
+    this.scheduleNextPoll(250);
 
-      peer.on('open', () => {
-        if (this.destroyed) return;
-        this.cloudReady = true;
-        this.callbacks.onStatusChange('READY', 'Trực tuyến · Sẵn sàng kết nối khác mạng');
-      });
+    if (this.heartbeatTimer === null) {
+      this.heartbeatTimer = setInterval(() => {
+        if (this.destroyed || !this.snapshot) return;
+        this.persistSession();
+        void apiPostRoom({
+          action: 'heartbeat',
+          game: GAME_NAMESPACE,
+          roomCode: this.roomCode,
+          senderToken: this.playerToken,
+        })
+          .then(({ status, data }) => {
+            if (this.destroyed) return;
+            if (status === 404 || status === 410 || data.phase === 'DISSOLVED') {
+              clearPersistedOnlineSession();
+              this.callbacks.onRoomClosed(data.message || 'Phòng Online đã đóng.');
+              this.destroy();
+              return;
+            }
+            this.ingestHeartbeats(data.heartbeats);
+          })
+          .catch(() => {
+            // Sẽ thử lại ở nhịp tim tiếp theo
+          });
+      }, HEARTBEAT_INTERVAL_MS);
+    }
 
-      peer.on('connection', (conn) => {
-        if (this.destroyed) return;
-        conn.on('data', (raw) => {
-          if (this.destroyed || !raw || typeof raw !== 'object') return;
-          this.handleIncomingPacket(raw as WirePacket, conn);
-        });
-        conn.on('close', () => {
-          this.handleGuestConnectionClosed(conn);
-        });
-        conn.on('error', () => {
-          this.handleGuestConnectionClosed(conn);
-        });
-      });
+    if (this.graceCheckTimer === null) {
+      this.graceCheckTimer = setInterval(() => {
+        if (this.destroyed || !this.snapshot) return;
+        const now = Date.now();
+        let changed = false;
 
-      peer.on('error', (err) => {
-        if (this.destroyed) return;
-        // Nếu PeerJS Cloud tạm bận / offline (VD môi trường test không Internet), vẫn hoạt động qua BroadcastChannel
-        const errType = (err as { type?: string })?.type;
-        if (errType === 'unavailable-id') {
-          this.callbacks.onStatusChange(
-            'RECONNECTING',
-            'Mã phòng đang giữ kết nối cũ — đang tự khôi phục...',
-          );
-        } else {
-          this.callbacks.onStatusChange(
-            'READY',
-            'Đang mở phòng (chế độ cục bộ · kết nối Internet để chơi khác mạng)',
-          );
-        }
-      });
+        for (const h of this.snapshot.humans) {
+          if (h.playerToken === this.playerToken) continue;
 
-      peer.on('disconnected', () => {
-        if (!this.destroyed && this.peer && !this.peer.destroyed) {
-          this.callbacks.onStatusChange('RECONNECTING', 'Đang nối lại máy chủ tín hiệu...');
-          try {
-            this.peer.reconnect();
-          } catch {
-            // Ignore
+          const lastSeen = this.lastSeenMap.get(h.playerToken);
+          if (h.connected && lastSeen && now - lastSeen > DISCONNECT_THRESHOLD_MS) {
+            h.connected = false;
+            h.disconnectedAt = now;
+            changed = true;
+          } else if (!h.connected && lastSeen && now - lastSeen <= DISCONNECT_THRESHOLD_MS) {
+            h.connected = true;
+            h.disconnectedAt = null;
+            h.botTakeover = false;
+            changed = true;
+          }
+
+          if (
+            this.snapshot.phase === 'PLAYING' &&
+            !h.connected &&
+            !h.botTakeover &&
+            h.disconnectedAt !== null &&
+            now - h.disconnectedAt >= ONLINE_DISCONNECT_GRACE_MS
+          ) {
+            h.botTakeover = true;
+            changed = true;
           }
         }
-      });
-    } catch {
-      this.callbacks.onStatusChange('READY', 'Phòng đang hoạt động (chế độ cục bộ)');
+
+        if (changed) {
+          this.snapshot = { ...this.snapshot, humans: [...this.snapshot.humans], updatedAt: now };
+          this.emitSnapshot();
+          if (this.isHost) {
+            this.broadcastSnapshot();
+          }
+        }
+      }, 1000);
     }
-  }
 
-  private setupGuestPeer(): void {
-    const guestId = `${ROOM_PEER_PREFIX}g-${this.playerToken.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}-${cryptoRandomInt(100, 999)}`;
-    try {
-      const peer = new Peer(guestId, {
-        debug: 0,
-        config: {
-          iceServers: CROSS_NETWORK_ICE_SERVERS,
-        },
-      });
-      this.peer = peer;
-
-      peer.on('open', () => {
-        if (this.destroyed) return;
-        this.cloudReady = true;
-        this.connectGuestToHostPeer();
-      });
-
-      peer.on('error', () => {
-        if (this.destroyed) return;
-        if (!this.joinResolved) {
-          // Vẫn đợi BroadcastChannel nếu đang test cùng máy
-          this.callbacks.onStatusChange('CONNECTING', `Đang tìm phòng #${this.roomCode}...`);
+    if (typeof document !== 'undefined' && !this.visibilityHandler) {
+      this.visibilityHandler = () => {
+        if (!document.hidden && !this.destroyed) {
+          // Vừa mở lại tab điện thoại -> đồng bộ ngay lập tức!
+          this.scheduleNextPoll(80);
         }
-      });
-    } catch {
-      // Fallback sang BroadcastChannel
-    }
-  }
-
-  private connectGuestToHostPeer(): void {
-    if (!this.peer || this.peer.destroyed || this.destroyed) return;
-    const hostPeerId = `${ROOM_PEER_PREFIX}${this.roomCode}`;
-    try {
-      const conn = this.peer.connect(hostPeerId, { reliable: true });
-      this.hostConn = conn;
-
-      conn.on('open', () => {
-        if (this.destroyed) return;
-        this.sendPacketToConn(conn, {
-          msgId: generateRandomId('msg'),
-          senderToken: this.playerToken,
-          type: 'JOIN_REQUEST',
-          roomCode: this.roomCode,
-          playerToken: this.playerToken,
-          name: this.localName,
-        });
-      });
-
-      conn.on('data', (raw) => {
-        if (this.destroyed || !raw || typeof raw !== 'object') return;
-        this.handleIncomingPacket(raw as WirePacket, conn);
-      });
-
-      conn.on('close', () => {
-        if (this.destroyed) return;
-        this.hostConn = null;
-        if (this.snapshot?.phase === 'PLAYING') {
-          this.markMemberDisconnected(this.snapshot.hostToken);
-          this.callbacks.onStatusChange(
-            'RECONNECTING',
-            'Chủ phòng tạm mất mạng — đang tự kết nối lại (tối đa 2 phút)...',
-          );
-          this.startGuestHostReconnectLoop();
-        }
-      });
-    } catch {
-      // Ignore
-    }
-  }
-
-  private startGuestHostReconnectLoop(): void {
-    if (this.reconnectTimer !== null || this.isHost) return;
-    this.reconnectTimer = setInterval(() => {
-      if (this.destroyed || this.hostConn?.open) {
-        if (this.reconnectTimer !== null) {
-          clearInterval(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        return;
-      }
-      this.connectGuestToHostPeer();
-      this.sendBroadcast({
-        msgId: generateRandomId('msg'),
-        senderToken: this.playerToken,
-        type: 'PING',
-        sentAt: Date.now(),
-      });
-    }, 2800);
-  }
-
-  private startTimers(): void {
-    this.heartbeatTimer = setInterval(() => {
-      if (this.destroyed || !this.snapshot) return;
-      this.persistSession();
-      this.broadcastAll({
-        msgId: generateRandomId('hb'),
-        senderToken: this.playerToken,
-        type: 'PING',
-        sentAt: Date.now(),
-      });
-    }, HEARTBEAT_INTERVAL_MS);
-
-    this.graceCheckTimer = setInterval(() => {
-      if (this.destroyed || !this.snapshot) return;
-      const now = Date.now();
-      let changed = false;
-
-      for (const h of this.snapshot.humans) {
-        if (h.playerToken === this.playerToken) continue;
-
-        // Phát hiện rớt mạng nếu quá HEARTBEAT_TIMEOUT_MS không thấy ping/pong
-        const lastSeen = this.lastSeenMap.get(h.playerToken);
-        if (h.connected && lastSeen && now - lastSeen > HEARTBEAT_TIMEOUT_MS) {
-          h.connected = false;
-          h.disconnectedAt = now;
-          changed = true;
-        }
-
-        // Sau đúng 2 phút (120 giây) mất kết nối -> Máy (SmartAI) tự đánh thay để không kẹt ván
-        if (
-          this.snapshot.phase === 'PLAYING' &&
-          !h.connected &&
-          !h.botTakeover &&
-          h.disconnectedAt !== null &&
-          now - h.disconnectedAt >= ONLINE_DISCONNECT_GRACE_MS
-        ) {
-          h.botTakeover = true;
-          changed = true;
-        }
-      }
-
-      if (changed) {
-        this.snapshot = { ...this.snapshot, humans: [...this.snapshot.humans], updatedAt: now };
-        this.emitSnapshot();
-        if (this.isHost) {
-          this.broadcastSnapshot();
-        }
-      }
-    }, 1000);
-  }
-
-  private handleGuestConnectionClosed(conn: DataConnection): void {
-    for (const [token, mapped] of this.guestConns.entries()) {
-      if (mapped === conn) {
-        this.guestConns.delete(token);
-        this.markMemberDisconnected(token);
-        break;
-      }
-    }
-  }
-
-  private markMemberDisconnected(token: string): void {
-    if (!this.snapshot) return;
-    const member = this.snapshot.humans.find((h) => h.playerToken === token);
-    if (!member) return;
-
-    if (this.snapshot.phase === 'LOBBY' && !member.isHost && this.isHost) {
-      // Trong phòng chờ chưa bắt đầu: rời mạng là trả ghế trống ngay
-      this.snapshot = {
-        ...this.snapshot,
-        humans: this.snapshot.humans.filter((h) => h.playerToken !== token),
-        updatedAt: Date.now(),
       };
-      this.emitSnapshot();
-      this.broadcastSnapshot();
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+    }
+  }
+
+  private scheduleNextPoll(delayMs?: number): void {
+    if (this.destroyed) return;
+    if (this.pollTimer !== null) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    const wait = delayMs ?? this.getAdaptivePollIntervalMs();
+    this.pollTimer = setTimeout(() => {
+      void this.pollOnce();
+    }, wait);
+  }
+
+  private async pollOnce(): Promise<void> {
+    if (this.destroyed || this.pollInFlight) {
+      this.scheduleNextPoll();
       return;
     }
+    this.pollInFlight = true;
+    try {
+      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved);
+      if (this.destroyed) return;
 
-    if (member.connected) {
-      member.connected = false;
-      member.disconnectedAt = Date.now();
-      this.snapshot = {
-        ...this.snapshot,
-        humans: this.snapshot.humans.map((h) => (h.playerToken === token ? { ...member } : h)),
-        updatedAt: Date.now(),
-      };
-      this.emitSnapshot();
-      if (this.isHost) {
-        this.broadcastSnapshot();
+      if (status === 404 || status === 410 || data.phase === 'DISSOLVED') {
+        clearPersistedOnlineSession();
+        this.callbacks.onRoomClosed(data.message || 'Phòng Online đã được giải tán.');
+        this.destroy();
+        return;
+      }
+
+      if (status === 200 && data.ok) {
+        if (this.consecutivePollErrors > 0) {
+          this.consecutivePollErrors = 0;
+          this.callbacks.onStatusChange('READY', `Đã nối lại phòng #${this.roomCode}`);
+        }
+        this.ingestHeartbeats(data.heartbeats);
+
+        if (typeof data.seq === 'number' && data.seq > this.lastSeq) {
+          this.lastSeq = data.seq;
+        }
+
+        if (Array.isArray(data.events) && data.events.length > 0) {
+          for (const row of data.events) {
+            if (this.destroyed) return;
+            if (row.packet) {
+              this.handleIncomingPacket(row.packet);
+            }
+          }
+        }
+
+        // Phòng trường hợp Khách vừa vào mà snapshot mới nhất trên server đã có mặt mình
+        if (!this.joinResolved && data.snapshot) {
+          const inHumans = data.snapshot.humans.some((h) => h.playerToken === this.playerToken);
+          if (inHumans) {
+            this.joinResolved = true;
+            this.snapshot = data.snapshot;
+            this.callbacks.onStatusChange('READY', `Đã kết nối phòng #${this.roomCode}`);
+            this.emitSnapshot();
+          }
+        }
+      }
+    } catch {
+      if (!this.destroyed) {
+        this.consecutivePollErrors += 1;
+        if (this.consecutivePollErrors >= 2) {
+          this.callbacks.onStatusChange('RECONNECTING', 'Mạng hơi chập chờn — đang tự nối lại...');
+        }
+      }
+    } finally {
+      this.pollInFlight = false;
+      if (!this.destroyed) {
+        this.scheduleNextPoll();
       }
     }
   }
 
-  private handleIncomingPacket(packet: WirePacket, conn: DataConnection | null): void {
+  private ingestHeartbeats(heartbeats?: Record<string, number>): void {
+    if (!heartbeats) return;
+    for (const [token, rawTs] of Object.entries(heartbeats)) {
+      const ts = Number(rawTs);
+      if (Number.isFinite(ts) && ts > 0) {
+        const prev = this.lastSeenMap.get(token) ?? 0;
+        if (ts > prev) this.lastSeenMap.set(token, ts);
+      }
+    }
+  }
+
+  private handleIncomingPacket(packet: WirePacket): void {
     if (packet.senderToken === this.playerToken) return;
     if (this.seenMsgIds.has(packet.msgId)) return;
     this.seenMsgIds.add(packet.msgId);
@@ -676,47 +700,12 @@ export class OnlineRoomClient {
     this.lastSeenMap.set(packet.senderToken, Date.now());
 
     switch (packet.type) {
-      case 'PING': {
-        if (this.snapshot) {
-          const sender = this.snapshot.humans.find((h) => h.playerToken === packet.senderToken);
-          if (sender && !sender.connected) {
-            sender.connected = true;
-            sender.disconnectedAt = null;
-            sender.botTakeover = false;
-            this.snapshot = {
-              ...this.snapshot,
-              humans: this.snapshot.humans.map((h) =>
-                h.playerToken === sender.playerToken ? { ...sender } : h,
-              ),
-              updatedAt: Date.now(),
-            };
-            this.emitSnapshot();
-            if (this.isHost) this.broadcastSnapshot();
-          }
-        }
-        this.sendReply(conn, {
-          msgId: generateRandomId('pong'),
-          senderToken: this.playerToken,
-          type: 'PONG',
-          sentAt: packet.sentAt,
-        });
-        break;
-      }
-
-      case 'PONG': {
-        break;
-      }
-
       case 'JOIN_REQUEST': {
         if (!this.isHost || !this.snapshot || packet.roomCode !== this.roomCode) return;
-        if (conn) {
-          this.guestConns.set(packet.playerToken, conn);
-        }
         this.lastSeenMap.set(packet.playerToken, Date.now());
 
         const existing = this.snapshot.humans.find((h) => h.playerToken === packet.playerToken);
         if (existing) {
-          // Người chơi cũ quay lại trong thời hạn 2 phút -> Khôi phục đúng ghế cũ!
           existing.connected = true;
           existing.disconnectedAt = null;
           existing.botTakeover = false;
@@ -733,7 +722,7 @@ export class OnlineRoomClient {
         }
 
         if (this.snapshot.phase !== 'LOBBY') {
-          this.sendReply(conn, {
+          this.pushPacket({
             msgId: generateRandomId('rej'),
             senderToken: this.playerToken,
             type: 'JOIN_REJECTED',
@@ -745,7 +734,7 @@ export class OnlineRoomClient {
 
         const maxHumans = Math.max(1, 6 - this.snapshot.botCount);
         if (this.snapshot.humans.length >= maxHumans) {
-          this.sendReply(conn, {
+          this.pushPacket({
             msgId: generateRandomId('rej'),
             senderToken: this.playerToken,
             type: 'JOIN_REJECTED',
@@ -782,6 +771,7 @@ export class OnlineRoomClient {
 
       case 'JOIN_REJECTED': {
         if (packet.targetToken !== this.playerToken) return;
+        clearPersistedOnlineSession();
         this.callbacks.onStatusChange('ERROR', packet.reason);
         this.callbacks.onRoomClosed(packet.reason);
         this.destroy();
@@ -790,48 +780,13 @@ export class OnlineRoomClient {
 
       case 'ROOM_SNAPSHOT': {
         if (this.isHost) return;
-        // Nếu khách đang giữ bản matchVersion mới hơn (khi Chủ phòng vừa F5), gửi ngược lại để khôi phục Chủ phòng!
-        if (
-          this.snapshot &&
-          this.snapshot.phase === 'PLAYING' &&
-          this.snapshot.matchVersion > packet.snapshot.matchVersion
-        ) {
-          this.sendReply(conn, {
-            msgId: generateRandomId('rehyd'),
-            senderToken: this.playerToken,
-            type: 'HOST_REHYDRATE',
-            snapshot: this.snapshot,
-          });
-          return;
-        }
+        const includesMe = packet.snapshot.humans.some((h) => h.playerToken === this.playerToken);
+        if (!this.joinResolved && !includesMe) return;
 
         this.joinResolved = true;
         this.snapshot = packet.snapshot;
-        if (this.reconnectTimer !== null) {
-          clearInterval(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
         this.callbacks.onStatusChange('READY', `Đã kết nối phòng #${this.roomCode}`);
         this.emitSnapshot();
-        break;
-      }
-
-      case 'HOST_REHYDRATE': {
-        if (!this.isHost) return;
-        if (!this.snapshot || packet.snapshot.matchVersion > this.snapshot.matchVersion) {
-          const restored: OnlineRoomSnapshot = {
-            ...packet.snapshot,
-            humans: packet.snapshot.humans.map((h) =>
-              h.playerToken === this.playerToken
-                ? { ...h, connected: true, disconnectedAt: null, botTakeover: false }
-                : h,
-            ),
-            updatedAt: Date.now(),
-          };
-          this.snapshot = restored;
-          this.emitSnapshot();
-          this.broadcastSnapshot();
-        }
         break;
       }
 
@@ -844,6 +799,10 @@ export class OnlineRoomClient {
       case 'ACTION_COMMIT': {
         if (this.seenActionIds.has(packet.actionId)) return;
         this.seenActionIds.add(packet.actionId);
+        if (this.seenActionIds.size > 400) {
+          const oldest = Array.from(this.seenActionIds).slice(0, 150);
+          oldest.forEach((id) => this.seenActionIds.delete(id));
+        }
 
         if (this.snapshot) {
           this.snapshot = {
@@ -854,11 +813,6 @@ export class OnlineRoomClient {
             updatedAt: Date.now(),
           };
           this.emitSnapshot();
-        }
-
-        // Nếu là Chủ phòng nhận nước đi từ 1 Khách -> phát tán lại cho tất cả Khách khác
-        if (this.isHost) {
-          this.broadcastToPeerConns(packet, packet.senderToken);
         }
 
         this.callbacks.onRemoteAction({
@@ -873,8 +827,25 @@ export class OnlineRoomClient {
 
       case 'LEAVE_ROOM': {
         if (!this.isHost || !this.snapshot) return;
-        this.guestConns.delete(packet.playerToken);
-        this.markMemberDisconnected(packet.playerToken);
+        if (this.snapshot.phase === 'LOBBY') {
+          this.snapshot = {
+            ...this.snapshot,
+            humans: this.snapshot.humans.filter((h) => h.playerToken !== packet.playerToken),
+            updatedAt: Date.now(),
+          };
+        } else {
+          this.snapshot = {
+            ...this.snapshot,
+            humans: this.snapshot.humans.map((h) =>
+              h.playerToken === packet.playerToken
+                ? { ...h, connected: false, disconnectedAt: Date.now() }
+                : h,
+            ),
+            updatedAt: Date.now(),
+          };
+        }
+        this.emitSnapshot();
+        this.broadcastSnapshot();
         break;
       }
 
@@ -905,7 +876,7 @@ export class OnlineRoomClient {
       this.applyMemberPatchAsHost(targetToken, patch);
       return;
     }
-    this.sendToHost({
+    this.pushPacket({
       msgId: generateRandomId('upd'),
       senderToken: this.playerToken,
       type: 'UPDATE_MEMBER',
@@ -927,7 +898,6 @@ export class OnlineRoomClient {
     let nextBots = this.snapshot.bots.map((b) => ({ ...b }));
 
     if (patch.landColor && patch.landColor !== target.landColor) {
-      // Nếu màu đất đang bị 1 người thật khác giữ -> từ chối trùng màu; nếu do Bot giữ -> hoán đổi mượt với Bot
       const takenByHuman = nextHumans.find(
         (h) => h.playerToken !== targetToken && h.landColor === patch.landColor,
       );
@@ -1002,25 +972,25 @@ export class OnlineRoomClient {
   /** Chủ phòng mời 1 người chơi ra khỏi phòng chờ */
   public kickMember(targetToken: string): void {
     if (!this.isHost || !this.snapshot || targetToken === this.playerToken) return;
-    const conn = this.guestConns.get(targetToken) ?? null;
-    this.sendReply(conn, {
-      msgId: generateRandomId('kick'),
-      senderToken: this.playerToken,
-      type: 'KICKED',
-      targetToken,
-      reason: 'Chủ phòng đã mời bạn rời khỏi phòng chờ.',
-    });
-    this.guestConns.delete(targetToken);
     this.snapshot = {
       ...this.snapshot,
       humans: this.snapshot.humans.filter((h) => h.playerToken !== targetToken),
       updatedAt: Date.now(),
     };
     this.emitSnapshot();
-    this.broadcastSnapshot();
+    this.pushPacket(
+      {
+        msgId: generateRandomId('kick'),
+        senderToken: this.playerToken,
+        type: 'KICKED',
+        targetToken,
+        reason: 'Chủ phòng đã mời bạn rời khỏi phòng chờ.',
+      },
+      this.snapshot,
+    );
   }
 
-  /** Chủ phòng bấm BẮT ĐẦU VÁN CHƠI (khi tổng Người đã vào + Máy >= 2) */
+  /** Chủ phòng bấm BẮT ĐẦU VÁN CHƠI (khi tổng Người + Máy >= 2) */
   public startMatch(): GameState | null {
     if (!this.isHost || !this.snapshot || this.snapshot.phase !== 'LOBBY') return null;
     const activeMembers = [...this.snapshot.humans, ...this.snapshot.bots];
@@ -1041,7 +1011,6 @@ export class OnlineRoomClient {
     });
     initialState.roomCode = this.roomCode;
 
-    // Gán seatId khớp chính xác với p_1, p_2... trong GameState
     const mappedHumans = this.snapshot.humans.map((h, idx) => ({
       ...h,
       seatId: initialState.players[idx]?.id ?? `p_${idx + 1}`,
@@ -1066,7 +1035,7 @@ export class OnlineRoomClient {
     return initialState;
   }
 
-  /** Phát nước đi đã thực thi lên toàn bộ phòng (đồng bộ xúc xắc + kết quả state 100%) */
+  /** Phát nước đi đã thực thi lên máy chủ Redis để mọi người đồng bộ + an toàn tuyệt đối khi F5 */
   public broadcastCommittedAction(
     action: GameAction,
     rollPower: number,
@@ -1079,6 +1048,7 @@ export class OnlineRoomClient {
 
     this.snapshot = {
       ...this.snapshot,
+      phase: 'PLAYING',
       matchState: resultingState,
       matchVersion: nextVer,
       updatedAt: Date.now(),
@@ -1095,30 +1065,38 @@ export class OnlineRoomClient {
       matchVersion: nextVer,
     };
 
-    if (this.isHost) {
-      this.broadcastAll(packet);
-    } else {
-      this.sendToHost(packet);
-    }
+    this.pushPacket(packet, this.snapshot);
   }
 
-  /** Giải tán phòng (dùng khi kết thúc ván Online hoặc Chủ phòng hủy phòng) */
+  /** Giải tán phòng (Chủ phòng) hoặc Rời phòng (Khách) */
   public dissolveOrLeave(reason = 'Phòng Online đã được giải tán.'): void {
     clearPersistedOnlineSession();
     if (this.isHost) {
-      this.broadcastAll({
-        msgId: generateRandomId('dis'),
+      void apiPostRoom({
+        action: 'dissolve',
+        game: GAME_NAMESPACE,
+        roomCode: this.roomCode,
         senderToken: this.playerToken,
-        type: 'DISSOLVE_ROOM',
-        reason,
-      });
+        packet: {
+          msgId: generateRandomId('dis'),
+          senderToken: this.playerToken,
+          type: 'DISSOLVE_ROOM',
+          reason,
+        },
+      }).catch(() => {});
     } else {
-      this.sendToHost({
-        msgId: generateRandomId('lv'),
+      void apiPostRoom({
+        action: 'push',
+        game: GAME_NAMESPACE,
+        roomCode: this.roomCode,
         senderToken: this.playerToken,
-        type: 'LEAVE_ROOM',
-        playerToken: this.playerToken,
-      });
+        packet: {
+          msgId: generateRandomId('lv'),
+          senderToken: this.playerToken,
+          type: 'LEAVE_ROOM',
+          playerToken: this.playerToken,
+        },
+      }).catch(() => {});
     }
     this.destroy();
   }
@@ -1126,6 +1104,10 @@ export class OnlineRoomClient {
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.pollTimer !== null) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -1134,35 +1116,10 @@ export class OnlineRoomClient {
       clearInterval(this.graceCheckTimer);
       this.graceCheckTimer = null;
     }
-    if (this.reconnectTimer !== null) {
-      clearInterval(this.reconnectTimer);
-      this.reconnectTimer = null;
+    if (typeof document !== 'undefined' && this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
     }
-    try {
-      this.hostConn?.close();
-    } catch {
-      // Ignore
-    }
-    for (const c of this.guestConns.values()) {
-      try {
-        c.close();
-      } catch {
-        // Ignore
-      }
-    }
-    this.guestConns.clear();
-    try {
-      this.peer?.destroy();
-    } catch {
-      // Ignore
-    }
-    this.peer = null;
-    try {
-      this.broadcastChannel?.close();
-    } catch {
-      // Ignore
-    }
-    this.broadcastChannel = null;
   }
 
   private emitSnapshot(): void {
@@ -1177,55 +1134,36 @@ export class OnlineRoomClient {
 
   private broadcastSnapshot(): void {
     if (!this.snapshot) return;
-    this.broadcastAll({
-      msgId: generateRandomId('snap'),
+    this.pushPacket(
+      {
+        msgId: generateRandomId('snap'),
+        senderToken: this.playerToken,
+        type: 'ROOM_SNAPSHOT',
+        snapshot: this.snapshot,
+      },
+      this.snapshot,
+    );
+  }
+
+  private pushPacket(packet: WirePacket, snapshotToStore?: OnlineRoomSnapshot): void {
+    if (this.destroyed) return;
+    this.seenMsgIds.add(packet.msgId);
+    void apiPostRoom({
+      action: 'push',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
       senderToken: this.playerToken,
-      type: 'ROOM_SNAPSHOT',
-      snapshot: this.snapshot,
-    });
-  }
-
-  private broadcastAll(packet: WirePacket): void {
-    this.sendBroadcast(packet);
-    this.broadcastToPeerConns(packet);
-  }
-
-  private broadcastToPeerConns(packet: WirePacket, excludeToken?: string): void {
-    for (const [token, conn] of this.guestConns.entries()) {
-      if (excludeToken && token === excludeToken) continue;
-      this.sendPacketToConn(conn, packet);
-    }
-  }
-
-  private sendToHost(packet: WirePacket): void {
-    this.sendBroadcast(packet);
-    if (this.hostConn?.open) {
-      this.sendPacketToConn(this.hostConn, packet);
-    }
-  }
-
-  private sendReply(conn: DataConnection | null, packet: WirePacket): void {
-    this.sendBroadcast(packet);
-    if (conn?.open) {
-      this.sendPacketToConn(conn, packet);
-    }
-  }
-
-  private sendBroadcast(packet: WirePacket): void {
-    if (!this.broadcastChannel) return;
-    try {
-      this.broadcastChannel.postMessage(packet);
-    } catch {
-      // Ignore
-    }
-  }
-
-  private sendPacketToConn(conn: DataConnection, packet: WirePacket): void {
-    if (!conn.open) return;
-    try {
-      conn.send(packet);
-    } catch {
-      // Ignore
-    }
+      packet,
+      snapshot: snapshotToStore,
+      phase: snapshotToStore?.phase,
+    })
+      .then(({ data }) => {
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq > this.lastSeq) {
+          this.lastSeq = data.seq;
+        }
+      })
+      .catch(() => {
+        // Bỏ qua lỗi mạng thoáng qua, poll vòng sau tự đồng bộ lại
+      });
   }
 }

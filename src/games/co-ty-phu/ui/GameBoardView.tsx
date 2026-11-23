@@ -302,7 +302,7 @@ const BoardTileCell = memo(function BoardTileCell({
             <div className="truncate text-[8px] leading-none font-extrabold uppercase tracking-[0.04em] text-amber-900 sm:text-[9px]">
               Đi qua nhận +3 Tr đ
             </div>
-            <div className="mt-0.5 text-[22px] leading-[0.95] font-black tracking-[0.06em] text-slate-900 drop-shadow-[0_1px_0_rgba(255,255,255,0.92)] sm:text-[26px]">
+            <div className="mt-0.5 text-[19px] leading-[0.95] font-black tracking-[0.06em] text-slate-900 drop-shadow-[0_1px_0_rgba(255,255,255,0.92)] sm:text-[25px]">
               START
             </div>
           </div>
@@ -920,8 +920,15 @@ export function GameBoardView({
   const lastChargeTickRef = useRef<number>(0);
   const lastRollPowerRef = useRef<number>(0.58);
 
-  const { stageW, stageH, scale, rotated, isCompactDevice, toLocalRect } = useLandscapeStage();
+  const { stageW, stageH, scale, rotated, isCompactDevice, setForceLandscape, toLocalRect } =
+    useLandscapeStage();
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Chỉ bật khung sân khấu ngang 17×11 khi thực sự đang ở trong bàn cờ (Sảnh & Phòng chờ hiển thị tự nhiên 60fps trên điện thoại)
+  useEffect(() => {
+    setForceLandscape(true);
+    return () => setForceLandscape(false);
+  }, [setForceLandscape]);
 
   // Chế độ Mượt: tự bật sẵn trên Điện thoại/Tablet nhỏ để chống lag 60fps, PC mặc định tắt (có thể bật/tắt bất cứ lúc nào)
   const [smoothMode, setSmoothMode] = useState<boolean>(() => {
@@ -3191,10 +3198,10 @@ export function GameBoardView({
               x = rect.x + sideDir * rect.w * 0.25 + multiShiftX;
               y = rect.y + rect.h * 0.04;
             } else if (tile?.kind === 'GO') {
-              // Ô Khởi Hành START (Bản A): dàn hàng ngang so le nhẹ ngay vùng giữa-dưới để lộ rõ chữ START phía trên & nhãn KHỞI HÀNH phía dưới
-              const stepX = count <= 1 ? 0 : Math.min(24, (rect.w - 34) / Math.max(1, count - 1));
+              // Ô Khởi Hành START (Bản A): dàn hàng ngang gọn ở nửa dưới ô để chữ START phía trên luôn thoáng 100%
+              const stepX = count <= 1 ? 0 : Math.min(22, (rect.w - 36) / Math.max(1, count - 1));
               x = rect.x + (slotIdx - (count - 1) / 2) * stepX;
-              y = rect.y + rect.h * 0.14 + (count > 1 ? (slotIdx % 2 === 0 ? -4 : 4) : 0);
+              y = rect.y + rect.h * 0.22 + (count > 1 ? (slotIdx % 2 === 0 ? -3 : 3) : 0);
             } else {
               // Ô ĐỨNG (Cạnh Dưới / Trên) & 3 Ô Góc còn lại: hạ nhẹ xuống phần dưới ô để lộ rõ tên địa danh phía trên
               const innerNudgeY = tile?.edge === null ? rect.h * 0.1 : rect.h * 0.2;

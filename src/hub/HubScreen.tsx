@@ -94,27 +94,27 @@ export function HubScreen({ onLaunchGame }: HubScreenProps) {
       />
 
       {/* Nội dung chính Sảnh Chọn Game */}
-      <div className="relative z-10 flex min-h-full w-full min-w-0 flex-col justify-between py-5">
+      <div className="relative z-10 flex min-h-full w-full min-w-0 flex-col justify-between py-3 sm:py-5">
         {/* Thanh trên: Logo Sảnh + Cụm Âm thanh & Đổi màu */}
-        <header className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-4 px-8">
+        <header className="mx-auto flex w-full max-w-[1440px] flex-wrap items-center justify-between gap-2 px-3 sm:flex-nowrap sm:gap-4 sm:px-8">
           <DiceLogoBadge />
           <ThemeSwitcherDock activeTheme={activeTheme} onSelectTheme={handleSelectTheme} />
         </header>
 
         {/* Thông báo nhẹ nếu người dùng thử bấm qua theme phụ */}
         {themeNotice && (
-          <div className="mx-auto mt-2 max-w-[90%] rounded-full border border-white/30 bg-slate-900/75 px-4 py-1 text-center text-xs font-medium text-amber-100 backdrop-blur-md">
+          <div className="mx-auto mt-2 max-w-[92%] rounded-full border border-white/30 bg-slate-900/85 px-4 py-1 text-center text-xs font-medium text-amber-100 backdrop-blur-md">
             {themeNotice}
           </div>
         )}
 
         {/* Tiêu đề trung tâm + Dải 5 thẻ game kéo ngang UIverse */}
-        <main className="my-auto flex w-full min-w-0 flex-col items-center pt-3 pb-2">
-          <h1 className="px-3 text-center text-4xl font-black tracking-wide text-white drop-shadow-[0_3px_10px_rgba(32,16,4,0.68)]">
+        <main className="my-auto flex w-full min-w-0 flex-col items-center pt-2 pb-2 sm:pt-3">
+          <h1 className="px-3 text-center text-2xl font-black tracking-wide text-white drop-shadow-[0_3px_10px_rgba(32,16,4,0.68)] sm:text-4xl">
             SẢNH BOARD GAME VIỆT NAM
           </h1>
 
-          <div className="mt-2 w-full min-w-0 max-w-[1440px]">
+          <div className="mt-1 w-full min-w-0 max-w-[1440px] sm:mt-2">
             <HorizontalGameShelf games={GAME_CATALOG} onSelectGame={handleSelectGame} />
           </div>
         </main>
