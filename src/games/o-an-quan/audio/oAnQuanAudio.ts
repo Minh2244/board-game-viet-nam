@@ -1,7 +1,5 @@
-import { useAudioStore } from '@/shared/audio/soundEngine';
-
 /**
- * Hệ thống âm thanh vật lý dân gian Web Audio API thuần code cho Ô Ăn Quan:
+ * Hệ thống âm thanh vật lý dân gian Web Audio API thuần code cho Ô Ăn Quan (luôn mặc định bật SFX):
  * - Lụm đá (playHandScoop): tiếng bàn tay vốc sỏi cọ lòng hố gỗ + chuỗi hạt sỏi va vào nhau rột roạt.
  * - Rải đá (playStoneDrop): tiếng từng viên sỏi cuội thả rơi gõ cộc vào mặt gỗ + lách cách tăng nhẹ cao độ.
  * - Đập tay xuống ô trống khi ăn (playHandSlap): tiếng vỗ lòng bàn tay "BỐP!" giòn tai xuống mặt chiếu/gỗ.
@@ -12,7 +10,6 @@ class OAnQuanAudioEngine {
   private noiseBuffer: AudioBuffer | null = null;
 
   private getCtx(): AudioContext | null {
-    if (useAudioStore.getState().muted) return null;
     if (typeof window === 'undefined') return null;
     if (!this.ctx) {
       const AC =

@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { readJson, writeJson } from '@/shared/storage/local';
+import { gameBgmEngine, type GameBgmScene } from './gameBgmEngine';
+
+export type BgmScene = 'hub' | GameBgmScene | null;
 
 const MUTE_STORAGE_KEY = 'bgvn_hub_muted';
 
@@ -29,15 +32,23 @@ export const useAudioStore = create<AudioStore>((set) => ({
       writeJson(MUTE_STORAGE_KEY, next);
       if (next) {
         stopBgmInternal();
+        gameBgmEngine.stop();
+        return { muted: true, bgmPlaying: false };
       }
-      return { muted: next, bgmPlaying: false };
+      // Bật lại đúng bản nhạc nền của màn/game hiện tại
+      queueMicrotask(() => resumeActiveBgmScene());
+      return { muted: false };
     }),
   setMuted: (muted: boolean) => {
     writeJson(MUTE_STORAGE_KEY, muted);
     if (muted) {
       stopBgmInternal();
+      gameBgmEngine.stop();
+      set({ muted: true, bgmPlaying: false });
+      return;
     }
-    set({ muted, bgmPlaying: false });
+    set({ muted: false });
+    queueMicrotask(() => resumeActiveBgmScene());
   },
 }));
 
@@ -48,6 +59,7 @@ let noiseBufferCache: AudioBuffer | null = null;
 let bgmAudioEl: HTMLAudioElement | null = null;
 let bgmSchedulerId: ReturnType<typeof setInterval> | null = null;
 let hubActive = false;
+let currentBgmScene: BgmScene = null;
 let bgmStep = 0;
 let nextNoteTime = 0;
 
@@ -244,7 +256,7 @@ function playTone(
   gainPeak = 0.12,
   type: OscillatorType = 'triangle',
 ) {
-  if (useAudioStore.getState().muted) return;
+  // Hiệu ứng SFX mặc định luôn bật (chỉ nút Nhạc nền tắt BGM, không tắt SFX!)
   const ctx = getCtx();
   if (!ctx) return;
   if (ctx.state === 'suspended') {
@@ -608,11 +620,53 @@ function stopBgmInternal() {
   useAudioStore.setState({ bgmPlaying: false });
 }
 
+function resumeActiveBgmScene() {
+  if (typeof window === 'undefined' || useAudioStore.getState().muted) return;
+  if (currentBgmScene === 'hub') {
+    gameBgmEngine.stop();
+    hubActive = true;
+    soundEngine.startHubBgm();
+  } else if (currentBgmScene) {
+    hubActive = false;
+    stopBgmInternal();
+    gameBgmEngine.start(currentBgmScene);
+    useAudioStore.setState({ bgmPlaying: true });
+  }
+}
+
 export const soundEngine = {
-  /** Đánh dấu có đang ở Sảnh Ngoài / Sảnh Chờ Game hay không (nhạc nền phát xuyên suốt tới khi vào ván) */
+  /** Chọn bản nhạc nền riêng theo màn chơi ('hub' hoặc 1 trong 5 game; null để dừng hẳn) */
+  setBgmScene(scene: BgmScene) {
+    currentBgmScene = scene;
+    if (scene === null) {
+      hubActive = false;
+      stopBgmInternal();
+      gameBgmEngine.stop();
+      return;
+    }
+    if (scene === 'hub') {
+      gameBgmEngine.stop();
+      hubActive = true;
+      if (!useAudioStore.getState().muted) {
+        soundEngine.startHubBgm();
+      }
+      return;
+    }
+    hubActive = false;
+    stopBgmInternal();
+    if (!useAudioStore.getState().muted) {
+      gameBgmEngine.start(scene);
+      useAudioStore.setState({ bgmPlaying: true });
+    }
+  },
+  /** Đánh dấu có đang ở Sảnh Ngoài / Sảnh Chờ Game hay không */
   setHubActive(active: boolean) {
     hubActive = active;
-    if (!active) {
+    if (active) {
+      currentBgmScene = 'hub';
+      gameBgmEngine.stop();
+    } else {
+      if (currentBgmScene === 'hub') currentBgmScene = null;
       stopBgmInternal();
     }
   },
@@ -687,8 +741,13 @@ export const soundEngine = {
 
     ensureLoopRunning();
   },
-  /** Tạm dừng nhạc nền sảnh */
+  /** Tạm dừng nhạc nền */
   stopHubBgm() {
     stopBgmInternal();
+    gameBgmEngine.stop();
+  },
+  /** Mở khóa AudioContext sau lần chạm đầu tiên của người dùng và phát đúng bài nhạc nền hiện tại */
+  unlockBgmOnGesture() {
+    resumeActiveBgmScene();
   },
 };

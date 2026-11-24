@@ -6,6 +6,7 @@ import {
   Copy,
   Crown,
   Dices,
+  Link2,
   Map,
   Palette,
   Play,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import { HUB_BG_WARM_WOOD_URL } from '@/hub/themes';
 import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
+import { buildInviteUrl } from '@/shared/network/onlineTransportConfig';
 import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from '../data/characters';
 import type { CharacterId, LandColorId } from '../engine/types';
 import type {
@@ -57,6 +59,7 @@ export function OnlineLobbyView({
   onStartMatch,
 }: OnlineLobbyViewProps) {
   const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const [editingToken, setEditingToken] = useState<string>(myToken);
   const { muted, toggleMute } = useAudioStore();
 
@@ -90,14 +93,19 @@ export function OnlineLobbyView({
     setTimeout(() => setCopied(false), 1800);
   };
 
-  const handleToggleAudio = () => {
-    const wasMuted = muted;
-    toggleMute();
-    if (wasMuted) {
-      soundEngine.setHubActive(true);
-      soundEngine.startHubBgm();
-      soundEngine.playPushClick();
+  const handleCopyInviteLink = () => {
+    soundEngine.playPushClick();
+    const url = buildInviteUrl('co-ty-phu', snapshot.roomCode);
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(url);
     }
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 1800);
+  };
+
+  const handleToggleAudio = () => {
+    toggleMute();
+    soundEngine.playPushClick();
   };
 
   return (
@@ -149,7 +157,15 @@ export function OnlineLobbyView({
               className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-3 py-1 text-xs font-black text-slate-950 transition hover:bg-amber-300 cursor-pointer"
             >
               {copied ? <Check className="h-3.5 w-3.5 stroke-[3]" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? 'Đã chép!' : 'Sao chép'}
+              {copied ? 'Đã chép!' : 'Chép mã'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCopyInviteLink}
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-400/25 border border-cyan-300/50 px-3 py-1 text-xs font-black text-cyan-200 transition hover:bg-cyan-400/40 cursor-pointer"
+            >
+              {copiedLink ? <Check className="h-3.5 w-3.5 stroke-[3] text-emerald-300" /> : <Link2 className="h-3.5 w-3.5" />}
+              {copiedLink ? 'Đã chép link!' : 'Chép link'}
             </button>
           </div>
 

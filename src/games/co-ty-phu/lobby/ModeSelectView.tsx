@@ -56,21 +56,15 @@ export function ModeSelectView({
   const { muted, bgmPlaying, toggleMute } = useAudioStore();
 
   const handleToggleAudio = () => {
-    const wasMuted = muted;
     toggleMute();
-    if (wasMuted) {
-      soundEngine.setHubActive(true);
-      soundEngine.startHubBgm();
-      soundEngine.playPushClick();
-    }
+    soundEngine.playPushClick();
   };
 
   const handleListenPreview = () => {
     if (muted) {
       useAudioStore.getState().setMuted(false);
     }
-    soundEngine.setHubActive(true);
-    soundEngine.startHubBgm();
+    soundEngine.setBgmScene('co-ty-phu');
     soundEngine.playPushClick();
   };
 

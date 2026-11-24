@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
 import { GAME_CATALOG } from '@/games/registry';
 import { HubScreen } from '@/hub/HubScreen';
+import { cleanGameUrlParams } from '@/shared/network/onlineTransportConfig';
 import type { GameId } from '@/shared/types/gameEntry';
 import { LandscapeViewport } from '@/shared/ui/LandscapeViewport';
 
@@ -10,11 +11,31 @@ function resolveInitialGameId(): GameId | null {
   if (typeof window === 'undefined') return null;
   try {
     const params = new URLSearchParams(window.location.search);
+    // Nếu có cờ test `?transport=http`, giữ trong sessionStorage của tab để kiểm thử 100% HTTP Long-Polling
+    if (params.get('transport') === 'http') {
+      window.sessionStorage.setItem('bgvn_force_http_only', '1');
+    }
+
     const urlGame = params.get('game');
-    if (urlGame && GAME_CATALOG.some((g) => g.id === urlGame && g.status === 'READY')) {
+    const urlRoom = params.get('room') || '';
+    const isValidInviteRoom = /^\d{6}$/.test(urlRoom);
+
+    // Chỉ tự mở game từ URL khi là LINK MỜI PHÒNG ONLINE hợp lệ (?game=...&room=XXXXXX).
+    // Nếu chỉ dính ?game=... lẻ (do copy nhầm link cũ) thì bỏ qua & dọn URL để luôn vào thẳng Sảnh Chính!
+    if (
+      urlGame &&
+      isValidInviteRoom &&
+      GAME_CATALOG.some((g) => g.id === urlGame && g.status === 'READY')
+    ) {
       window.sessionStorage.setItem(ACTIVE_GAME_STORAGE_KEY, urlGame);
       return urlGame as GameId;
     }
+
+    if (urlGame || urlRoom) {
+      cleanGameUrlParams();
+    }
+
+    // Bấm F5 trên cùng tab cá nhân vẫn khôi phục đúng game đang mở qua sessionStorage (không ảnh hưởng máy khác!)
     const saved = window.sessionStorage.getItem(ACTIVE_GAME_STORAGE_KEY);
     if (saved && GAME_CATALOG.some((g) => g.id === saved && g.status === 'READY')) {
       return saved as GameId;
@@ -32,9 +53,8 @@ export function App() {
     setActiveGameId(id);
     try {
       window.sessionStorage.setItem(ACTIVE_GAME_STORAGE_KEY, id);
-      const url = new URL(window.location.href);
-      url.searchParams.set('game', id);
-      window.history.replaceState(null, '', url.pathname + url.search);
+      // Giữ thanh địa chỉ luôn sạch tinh để khi gửi link web cho bạn bè sẽ không bị tự nhảy vào game!
+      cleanGameUrlParams();
     } catch {
       // Ignore
     }
@@ -44,10 +64,7 @@ export function App() {
     setActiveGameId(null);
     try {
       window.sessionStorage.removeItem(ACTIVE_GAME_STORAGE_KEY);
-      const url = new URL(window.location.href);
-      url.searchParams.delete('game');
-      url.searchParams.delete('room');
-      window.history.replaceState(null, '', url.pathname + url.search);
+      cleanGameUrlParams();
     } catch {
       // Ignore
     }
@@ -78,5 +95,3 @@ export function App() {
     </LandscapeViewport>
   );
 }
-
-export default App;

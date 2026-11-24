@@ -80,13 +80,13 @@ function readUrlRoomCode(): string {
   }
 }
 
-function syncRoomUrl(roomCode: string | null): void {
+function syncRoomUrl(_roomCode: string | null): void {
   if (typeof window === 'undefined') return;
   try {
     const url = new URL(window.location.href);
-    url.searchParams.set('game', 'o-an-quan');
-    if (roomCode) url.searchParams.set('room', roomCode);
-    else url.searchParams.delete('room');
+    if (!url.searchParams.has('game') && !url.searchParams.has('room')) return;
+    url.searchParams.delete('game');
+    url.searchParams.delete('room');
     window.history.replaceState(null, '', url.pathname + url.search);
   } catch {
     // Ignore
@@ -164,18 +164,23 @@ export default function OAnQuanGame({ onExitToHub }: GameComponentProps) {
   }, [activeMatch, screen, autoRestoringCode]);
 
   useEffect(() => {
-    const inLobby = !activeMatch;
-    soundEngine.setHubActive(inLobby);
-    if (inLobby && !muted) {
-      soundEngine.startHubBgm();
-    }
-  }, [activeMatch, muted]);
+    syncRoomUrl(null);
+  }, []);
+
+  useEffect(() => {
+    soundEngine.setBgmScene('o-an-quan');
+    const unlock = () => {
+      if (!useAudioStore.getState().muted) soundEngine.unlockBgmOnGesture();
+    };
+    window.addEventListener('pointerdown', unlock, { passive: true });
+    return () => window.removeEventListener('pointerdown', unlock);
+  }, [muted]);
 
   useEffect(() => {
     return () => {
       onlineClientRef.current?.destroy();
       onlineClientRef.current = null;
-      soundEngine.setHubActive(false);
+      soundEngine.setBgmScene(null);
     };
   }, []);
 

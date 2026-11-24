@@ -1,4 +1,3 @@
-import { useAudioStore } from '@/shared/audio/soundEngine';
 import type { CharacterId } from '../engine/types';
 
 let gCtx: AudioContext | null = null;
@@ -7,7 +6,7 @@ let reverbNode: ConvolverNode | null = null;
 let noiseBuffer: AudioBuffer | null = null;
 
 function ensureAudio(): AudioContext | null {
-  if (typeof window === 'undefined' || useAudioStore.getState().muted) return null;
+  if (typeof window === 'undefined') return null;
   const Ctor =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;

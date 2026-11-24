@@ -543,15 +543,14 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
     trackState.tiles[2].ownerId = trackState.players[1].id;
     trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 1 của P2
     expect(trackState.players[0].consecutiveRentHits).toBe(1);
-    // Cho P2 đi 1 lượt vô thưởng vô phạt rồi quay lại P1
-    trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [3] }).state; // P2 -> ô 3 Cơ Hội
-    trackState = reduceGameAction(trackState, { type: 'CONFIRM_CARD' }).state;
+    // Cho P2 đi 1 lượt vô thưởng vô phạt (ô 4 đất trống -> bỏ mua, tránh rút thẻ Cơ Hội đi Tù ngẫu nhiên) rồi quay lại P1
+    trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [4] }).state;
     if (trackState.phase === 'BUY_OR_SKIP_DECISION') {
       trackState = reduceGameAction(trackState, { type: 'BUY_PROPERTY', buy: false }).state;
     }
-    if (trackState.currentPlayerIndex === 0 && trackState.phase === 'WAIT_ROLL') {
-      trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 2 của P2 -> lần 2 liên tiếp!
-      expect(trackState.players[0].consecutiveRentHits).toBe(2);
-    }
+    expect(trackState.currentPlayerIndex).toBe(0);
+    expect(trackState.phase).toBe('WAIT_ROLL');
+    trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 2 của P2 -> lần 2 liên tiếp!
+    expect(trackState.players[0].consecutiveRentHits).toBe(2);
   });
 });

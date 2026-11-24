@@ -1741,7 +1741,10 @@ export function GameBoardView({
     async (
       action: GameAction,
       rollPower = 0.58,
-      remoteOverride?: { resultingState: GameState },
+      remoteOverride?: {
+        resultingState?: GameState;
+        deckSync?: { chanceDeck?: string[]; fateDeck?: string[] };
+      },
     ) => {
       if (isAnimatingRef.current) return;
       isAnimatingRef.current = true;
@@ -1775,7 +1778,15 @@ export function GameBoardView({
       }
 
       const { state: reducedState, events } = reduceGameAction(prevState, resolvedAction);
-      const nextState = remoteOverride ? remoteOverride.resultingState : reducedState;
+      const nextState = remoteOverride?.resultingState
+        ? remoteOverride.resultingState
+        : remoteOverride?.deckSync
+          ? {
+              ...reducedState,
+              chanceDeck: remoteOverride.deckSync.chanceDeck ?? reducedState.chanceDeck,
+              fateDeck: remoteOverride.deckSync.fateDeck ?? reducedState.fateDeck,
+            }
+          : reducedState;
       latestStateRef.current = nextState;
 
       // Phát tán ngay nước đi lên phòng Online (P2P DataChannel + Singapore Redis) để mọi người cùng xem hoạt ảnh đồng bộ
@@ -2064,6 +2075,7 @@ export function GameBoardView({
           isAnimatingRef.current = false;
           void dispatchAction(queued.action, queued.rollPower, {
             resultingState: queued.resultingState,
+            deckSync: queued.deckSync,
           });
         } else {
           isAnimatingRef.current = false;
@@ -2096,7 +2108,10 @@ export function GameBoardView({
       if (isAnimatingRef.current) {
         remoteQueueRef.current.push(ev);
       } else {
-        void dispatchAction(ev.action, ev.rollPower, { resultingState: ev.resultingState });
+        void dispatchAction(ev.action, ev.rollPower, {
+          resultingState: ev.resultingState,
+          deckSync: ev.deckSync,
+        });
       }
     });
   }, [onlineContext, dispatchAction]);
@@ -2490,7 +2505,7 @@ export function GameBoardView({
               <button
                 type="button"
                 onClick={toggleMute}
-                title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                title={muted ? 'Bật nhạc nền (tiếng cờ luôn bật)' : 'Tắt nhạc nền (tiếng cờ luôn bật)'}
                 className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
               >
                 {muted ? <VolumeX className="h-4 w-4 text-rose-300" /> : <Volume2 className="h-4 w-4" />}

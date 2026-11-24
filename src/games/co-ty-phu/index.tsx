@@ -94,16 +94,14 @@ function readUrlRoomCode(): string {
   }
 }
 
-function syncRoomUrl(roomCode: string | null): void {
+function syncRoomUrl(_roomCode: string | null): void {
   if (typeof window === 'undefined') return;
   try {
+    // Luôn giữ thanh địa chỉ sạch (không tự gắn ?game / ?room khi chơi); người chơi chia sẻ qua nút "Chép link mời".
     const url = new URL(window.location.href);
-    if (roomCode) {
-      url.searchParams.set('game', 'co-ty-phu');
-      url.searchParams.set('room', roomCode);
-    } else {
-      url.searchParams.delete('room');
-    }
+    if (!url.searchParams.has('game') && !url.searchParams.has('room')) return;
+    url.searchParams.delete('game');
+    url.searchParams.delete('room');
     window.history.replaceState(null, '', url.pathname + url.search);
   } catch {
     // Ignore
@@ -252,32 +250,32 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     }
   }, [activeMatch, screen, autoRestoringRoomCode]);
 
-  // Giữ nhạc nền lễ hội 124 BPM phát vui tươi xuyên suốt màn Chọn Chế Độ & Phòng Chờ; tắt khi bước vào ván cờ
+  // Dọn tham số ?game/?room khỏi thanh địa chỉ sau khi đã đọc mã mời (để link trên trình duyệt luôn sạch!)
   useEffect(() => {
-    const inLobby = !activeMatch;
-    soundEngine.setHubActive(inLobby);
-    if (inLobby && !muted) {
-      soundEngine.startHubBgm();
-    }
+    syncRoomUrl(null);
+  }, []);
+
+  // Nhạc nền riêng cho Cờ Tỷ Phú 3D (xuyên suốt sảnh chờ & trong ván; chỉ tắt khi bấm nút Nhạc nền)
+  useEffect(() => {
+    soundEngine.setBgmScene('co-ty-phu');
 
     const unlock = () => {
-      if (!activeMatch && !useAudioStore.getState().muted) {
-        soundEngine.setHubActive(true);
-        soundEngine.startHubBgm();
+      if (!useAudioStore.getState().muted) {
+        soundEngine.unlockBgmOnGesture();
       }
     };
     window.addEventListener('pointerdown', unlock, { passive: true });
     return () => {
       window.removeEventListener('pointerdown', unlock);
     };
-  }, [activeMatch, muted]);
+  }, [muted]);
 
-  // Dọn kết nối Online khi thoát hẳn khỏi game Cờ Tỷ Phú
+  // Dọn kết nối Online & nhạc nền khi thoát hẳn khỏi game Cờ Tỷ Phú
   useEffect(() => {
     return () => {
       onlineClientRef.current?.destroy();
       onlineClientRef.current = null;
-      soundEngine.setHubActive(false);
+      soundEngine.setBgmScene(null);
     };
   }, []);
 
@@ -715,13 +713,8 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
   };
 
   const handleToggleAudio = () => {
-    const wasMuted = muted;
     toggleMute();
-    if (wasMuted) {
-      soundEngine.setHubActive(true);
-      soundEngine.startHubBgm();
-      soundEngine.playPushClick();
-    }
+    soundEngine.playPushClick();
   };
 
   return (

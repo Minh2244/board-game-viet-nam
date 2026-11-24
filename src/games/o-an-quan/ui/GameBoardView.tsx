@@ -850,7 +850,7 @@ export function GameBoardView({
           <button
             type="button"
             onClick={toggleMute}
-            title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+            title={muted ? 'Bật nhạc nền (tiếng cờ luôn bật)' : 'Tắt nhạc nền (tiếng cờ luôn bật)'}
             className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-[#4A2510] bg-gradient-to-b from-[#F5DEB3] to-[#C68B59] text-[#4A2510] shadow-[0_4px_0_#4A2510] transition hover:brightness-105 cursor-pointer"
           >
             {muted ? <VolumeX className="h-5 w-5 text-rose-700" /> : <Volume2 className="h-5 w-5" />}

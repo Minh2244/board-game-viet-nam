@@ -45,8 +45,8 @@ export function ThemeSwitcherDock({ activeTheme, onSelectTheme }: ThemeSwitcherD
       <button
         type="button"
         onClick={handleMuteToggle}
-        title={muted ? 'Bật âm thanh sảnh' : 'Tắt âm thanh sảnh'}
-        aria-label={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+        title={muted ? 'Bật nhạc nền sảnh (tiếng hiệu ứng luôn bật)' : 'Tắt nhạc nền sảnh (tiếng hiệu ứng luôn bật)'}
+        aria-label={muted ? 'Bật nhạc nền' : 'Tắt nhạc nền'}
         className="uiverse-push-btn uiverse-dome-shine relative flex h-10 w-10 items-center justify-center rounded-full border border-white/45 text-white cursor-pointer sm:h-14 sm:w-14"
         style={{
           background: muted

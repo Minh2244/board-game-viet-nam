@@ -1,5 +1,6 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
-import { createInitialOAnQuanState } from '../engine/reducer';
+import { isFastLaneDisabled } from '@/shared/network/onlineTransportConfig';
+import { createInitialOAnQuanState, executeSowMove } from '../engine/reducer';
 import type {
   CharacterId,
   OAnQuanState,
@@ -233,6 +234,7 @@ async function apiGetRoom(
   code: string,
   sinceSeq: number,
   full = false,
+  waitMs = 0,
 ): Promise<{ status: number; data: ApiRoomResponse }> {
   const qs = new URLSearchParams({
     game: GAME_NAMESPACE,
@@ -240,6 +242,7 @@ async function apiGetRoom(
     sinceSeq: String(sinceSeq),
   });
   if (full) qs.set('full', '1');
+  if (!full && waitMs > 0) qs.set('waitMs', String(waitMs));
   const res = await fetch(`/api/room?${qs.toString()}`, { cache: 'no-store' });
   let data: ApiRoomResponse = {};
   try {
@@ -286,6 +289,7 @@ export class OAnQuanOnlineClient {
   private pushChain: Promise<void> = Promise.resolve();
   private broadcastChan: BroadcastChannel | null = null;
   private rtcPeers = new Map<string, PeerChannelState>();
+  private checkpointTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: {
     roomCode: string;
@@ -299,6 +303,10 @@ export class OAnQuanOnlineClient {
     this.localName = options.playerName.trim() || (options.isHost ? 'Cu Tí' : 'Bé Mít');
     this.isHost = options.isHost;
     this.callbacks = options.callbacks;
+  }
+
+  public getSnapshot(): OAnQuanRoomSnapshot | null {
+    return this.snapshot;
   }
 
   public async startAsHost(): Promise<string> {
@@ -392,7 +400,7 @@ export class OAnQuanOnlineClient {
 
     if (data.rejoined && data.snapshot) {
       this.isHost = data.hostToken === this.playerToken;
-      this.snapshot = data.snapshot;
+      this.snapshot = this.replayMissedMovesIntoSnapshot(data.snapshot, data.events);
       this.joinResolved = true;
       this.persistSession();
       this.callbacks.onStatusChange('READY', `Đã khôi phục phòng #${this.roomCode}`);
@@ -444,7 +452,7 @@ export class OAnQuanOnlineClient {
     }
 
     this.isHost = data.hostToken === this.playerToken;
-    this.snapshot = data.snapshot;
+    this.snapshot = this.replayMissedMovesIntoSnapshot(data.snapshot, data.events);
     this.lastSeq = data.seq ?? 0;
     this.joinResolved = true;
     this.ingestHeartbeats(data.heartbeats);
@@ -454,9 +462,53 @@ export class OAnQuanOnlineClient {
     this.startSyncLoops();
 
     if (this.isHost) {
-      this.broadcastSnapshot();
+      this.scheduleCheckpoint(150);
     }
     return this.snapshot;
+  }
+
+  private replayMissedMovesIntoSnapshot(
+    snap: OAnQuanRoomSnapshot,
+    events?: ApiEventRow[],
+  ): OAnQuanRoomSnapshot {
+    if (!snap.matchState || !Array.isArray(events) || events.length === 0) return snap;
+    let state = snap.matchState;
+    let ver = snap.matchVersion;
+    for (const row of events) {
+      const pkt = row?.packet;
+      if (!pkt || pkt.type !== 'MOVE_COMMIT' || pkt.matchVersion <= ver) continue;
+      if (this.seenMoveIds.has(pkt.moveId)) continue;
+      this.seenMoveIds.add(pkt.moveId);
+      const { state: next } = executeSowMove(state, pkt.pitIndex, pkt.direction, pkt.side);
+      state = next;
+      ver = pkt.matchVersion;
+    }
+    return { ...snap, matchState: state, matchVersion: ver };
+  }
+
+  private hasOpenRtcPeer(): boolean {
+    if (isFastLaneDisabled()) return false;
+    for (const peer of this.rtcPeers.values()) {
+      if (peer.dc && peer.dc.readyState === 'open') return true;
+    }
+    return false;
+  }
+
+  private scheduleCheckpoint(delayMs = 1200): void {
+    if (this.destroyed || !this.snapshot) return;
+    if (this.checkpointTimer !== null) clearTimeout(this.checkpointTimer);
+    this.checkpointTimer = setTimeout(() => {
+      this.checkpointTimer = null;
+      if (this.destroyed || !this.snapshot) return;
+      const snapClone = structuredClone(this.snapshot);
+      void apiPostRoom({
+        action: 'checkpoint',
+        game: GAME_NAMESPACE,
+        roomCode: this.roomCode,
+        senderToken: this.playerToken,
+        snapshot: snapClone,
+      }).catch(() => {});
+    }, delayMs);
   }
 
   private persistSession(): void {
@@ -470,10 +522,10 @@ export class OAnQuanOnlineClient {
   }
 
   private getAdaptivePollIntervalMs(): number {
-    if (!this.joinResolved) return 220;
+    if (!this.joinResolved) return 60;
     if (typeof document !== 'undefined' && document.hidden) return 3600;
-    if (this.snapshot?.phase === 'PLAYING') return 180;
-    return 480;
+    if (this.hasOpenRtcPeer()) return 2200;
+    return 25;
   }
 
   private startSyncLoops(): void {
@@ -566,12 +618,21 @@ export class OAnQuanOnlineClient {
 
   private async pollOnce(): Promise<void> {
     if (this.destroyed || this.pollInFlight) {
-      this.scheduleNextPoll();
       return;
     }
     this.pollInFlight = true;
+    let hadError = false;
     try {
-      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved);
+      const hidden = typeof document !== 'undefined' && document.hidden;
+      const useLongPoll = !hidden && !this.hasOpenRtcPeer();
+      const waitMs = !this.joinResolved
+        ? 1500
+        : useLongPoll
+          ? this.snapshot?.phase === 'PLAYING'
+            ? 3000
+            : 2500
+          : 0;
+      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved, waitMs);
       if (this.destroyed) return;
 
       if (status === 404 || status === 410 || data.phase === 'DISSOLVED') {
@@ -606,6 +667,7 @@ export class OAnQuanOnlineClient {
         }
       }
     } catch {
+      hadError = true;
       if (!this.destroyed) {
         this.consecutivePollErrors += 1;
         if (this.consecutivePollErrors >= 2) {
@@ -614,7 +676,7 @@ export class OAnQuanOnlineClient {
       }
     } finally {
       this.pollInFlight = false;
-      if (!this.destroyed) this.scheduleNextPoll();
+      if (!this.destroyed) this.scheduleNextPoll(hadError ? 750 : undefined);
     }
   }
 
@@ -738,6 +800,22 @@ export class OAnQuanOnlineClient {
       case 'MOVE_COMMIT': {
         if (this.seenMoveIds.has(packet.moveId)) return;
         this.seenMoveIds.add(packet.moveId);
+        if (this.snapshot?.matchState) {
+          const { state: next } = executeSowMove(
+            this.snapshot.matchState,
+            packet.pitIndex,
+            packet.direction,
+            packet.side,
+          );
+          this.snapshot = {
+            ...this.snapshot,
+            phase: 'PLAYING',
+            matchState: next,
+            matchVersion: Math.max(this.snapshot.matchVersion, packet.matchVersion),
+            updatedAt: Date.now(),
+          };
+          if (this.isHost) this.scheduleCheckpoint();
+        }
         this.callbacks.onRemoteMove({
           moveId: packet.moveId,
           side: packet.side,
@@ -905,7 +983,8 @@ export class OAnQuanOnlineClient {
       matchVersion: nextVer,
     };
 
-    this.pushPacket(pkt, this.snapshot);
+    this.pushFastEventOnly(pkt);
+    this.scheduleCheckpoint();
   }
 
   public syncVerifiedStateAfterRemoteMove(verifiedState: OAnQuanState, matchVersion: number): void {
@@ -917,6 +996,7 @@ export class OAnQuanOnlineClient {
       matchVersion: Math.max(this.snapshot.matchVersion, matchVersion),
       updatedAt: Date.now(),
     };
+    if (this.isHost) this.scheduleCheckpoint();
   }
 
   public dissolveOrLeave(reason = 'Phòng Ô Ăn Quan Online đã kết thúc.'): void {
@@ -961,6 +1041,10 @@ export class OAnQuanOnlineClient {
     if (this.pollTimer !== null) clearTimeout(this.pollTimer);
     if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
     if (this.graceCheckTimer !== null) clearInterval(this.graceCheckTimer);
+    if (this.checkpointTimer !== null) {
+      clearTimeout(this.checkpointTimer);
+      this.checkpointTimer = null;
+    }
     if (typeof document !== 'undefined' && this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
     }
@@ -1004,7 +1088,7 @@ export class OAnQuanOnlineClient {
   }
 
   private initFastLanes(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || isFastLaneDisabled()) return;
     if (!this.broadcastChan && typeof BroadcastChannel !== 'undefined') {
       try {
         this.broadcastChan = new BroadcastChannel(`bgvn_oaq_fast_${this.roomCode}`);
@@ -1023,7 +1107,7 @@ export class OAnQuanOnlineClient {
   }
 
   private ensureRtcPeers(): void {
-    if (this.destroyed || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
+    if (this.destroyed || isFastLaneDisabled() || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
     const activeTokens = new Set<string>();
     for (const m of this.snapshot.members) {
       if (m.playerToken === this.playerToken || !m.connected) continue;
@@ -1179,6 +1263,25 @@ export class OAnQuanOnlineClient {
         }
       }
     }
+  }
+
+  private pushFastEventOnly(packet: WirePacket): void {
+    if (this.destroyed) return;
+    this.seenMsgIds.add(packet.msgId);
+    this.sendOverFastLanes(packet);
+    void apiPostRoom({
+      action: 'push',
+      game: GAME_NAMESPACE,
+      roomCode: this.roomCode,
+      senderToken: this.playerToken,
+      packet,
+    })
+      .then(({ data }) => {
+        if (!this.destroyed && typeof data.seq === 'number' && data.seq === this.lastSeq + 1) {
+          this.lastSeq = data.seq;
+        }
+      })
+      .catch(() => {});
   }
 
   private pushPacket(packet: WirePacket, snapshotToStore?: OAnQuanRoomSnapshot): void {

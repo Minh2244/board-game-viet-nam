@@ -1,5 +1,10 @@
 import { handleRoomGet, handleRoomPost } from './_roomStore.js';
 
+export const config = {
+  runtime: 'edge',
+  regions: ['sin1'],
+};
+
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,

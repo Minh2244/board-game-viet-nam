@@ -26,6 +26,7 @@ const LOBBY_TTL_SEC = 15 * 60; // 15 phút không hoạt động ở sảnh ch�
 const PLAYING_TTL_SEC = 30 * 60; // 30 phút cả bàn bỏ ngang mới tự dọn (đang chơi heartbeat gia hạn liên tục)
 const DISSOLVED_TTL_SEC = 60; // Giữ 60s để mọi máy nhận thông báo giải tán phòng
 const MAX_EVENTS_KEPT = 24;
+const MAX_LONG_POLL_MS = 3500;
 const HB_FIELD_PREFIX = 'hb:';
 const HB_MAP_FIELD = 'hb_map';
 const EV_FIELD_PREFIX = 'ev:';
@@ -52,6 +53,50 @@ interface MemoryEntry {
   expiresAt: number;
 }
 const memoryRooms = new Map<string, MemoryEntry>();
+const memoryWaiters = new Map<string, Set<() => void>>();
+
+function notifyMemoryWaiters(key: string): void {
+  const waiters = memoryWaiters.get(key);
+  if (!waiters || waiters.size === 0) return;
+  memoryWaiters.delete(key);
+  for (const wake of waiters) {
+    try {
+      wake();
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+function waitForMemoryRoomChange(key: string, timeoutMs: number): Promise<void> {
+  if (timeoutMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onWake = () => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      const set = memoryWaiters.get(key);
+      if (set) {
+        set.delete(onWake);
+        if (set.size === 0) memoryWaiters.delete(key);
+      }
+      resolve();
+    };
+    let set = memoryWaiters.get(key);
+    if (!set) {
+      set = new Set();
+      memoryWaiters.set(key, set);
+    }
+    set.add(onWake);
+    timer = setTimeout(onWake, timeoutMs);
+  });
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function cleanExpiredMemory(): void {
   const now = Date.now();
@@ -181,10 +226,27 @@ function extractMatchVersion(snapshot: Record<string, unknown> | null): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+type SnapshotMemberRecord = {
+  playerToken?: string;
+  connected?: boolean;
+  disconnectedAt?: number | null;
+  botTakeover?: boolean;
+};
+
+/** Hỗ trợ đồng nhất cả `humans` (Cờ Tỷ Phú, Cá Ngựa, Cờ Vua, Cờ Tướng) lẫn `members` (Ô Ăn Quan) */
+function extractSnapshotMembers(snapshot: Record<string, unknown> | null): SnapshotMemberRecord[] {
+  if (!snapshot) return [];
+  const humans = (snapshot as { humans?: unknown }).humans;
+  if (Array.isArray(humans)) return humans as SnapshotMemberRecord[];
+  const members = (snapshot as { members?: unknown }).members;
+  if (Array.isArray(members)) return members as SnapshotMemberRecord[];
+  return [];
+}
+
 function isMemberToken(doc: StoredRoomDocument, token: string): boolean {
   if (token === doc.hostToken) return true;
-  const humans = (doc.snapshot as { humans?: Array<{ playerToken?: string }> } | null)?.humans;
-  return Array.isArray(humans) && humans.some((h) => h.playerToken === token);
+  const list = extractSnapshotMembers(doc.snapshot);
+  return list.some((m) => m.playerToken === token);
 }
 
 async function readRoomSeq(key: string): Promise<number | null> {
@@ -372,6 +434,7 @@ async function pushEventOnlyFast(
     entry.eventsBySeq.delete(nextSeq - MAX_EVENTS_KEPT);
   }
   entry.doc.events = [];
+  notifyMemoryWaiters(key);
   return nextSeq;
 }
 
@@ -460,7 +523,45 @@ async function commitRoomUpdateAtomic(
     eventsBySeq,
     expiresAt: Date.now() + ttl * 1000,
   });
+  notifyMemoryWaiters(key);
   return nextSeq;
+}
+
+/**
+ * Lưu checkpoint snapshot dự phòng F5 ngầm (KHÔNG tăng `seq` nên không đánh thức Long-Polling vô ích).
+ */
+async function saveSnapshotCheckpointOnly(
+  key: string,
+  doc: StoredRoomDocument,
+  senderToken: string,
+  now: number,
+): Promise<void> {
+  const ttl = ttlForPhase(doc.phase);
+  const nextHeartbeats = mergeHeartbeats(doc.heartbeats, { [senderToken]: now });
+  doc.heartbeats = nextHeartbeats;
+
+  const redis = getUpstashRedis();
+  if (redis) {
+    const slimDocForData: StoredRoomDocument = { ...doc, events: [] };
+    const pipe = redis.pipeline();
+    pipe.hset(key, {
+      phase: doc.phase,
+      data: JSON.stringify(slimDocForData),
+      [HB_MAP_FIELD]: JSON.stringify(nextHeartbeats),
+      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
+    });
+    pipe.expire(key, ttl);
+    await pipe.exec();
+    return;
+  }
+
+  const existing = memoryRooms.get(key);
+  if (!existing) return;
+  doc.events = [];
+  doc.seq = existing.doc.seq;
+  existing.doc = structuredClone(doc);
+  existing.heartbeats = mergeHeartbeats(existing.heartbeats, nextHeartbeats);
+  existing.expiresAt = Date.now() + ttl * 1000;
 }
 
 /**
@@ -547,19 +648,21 @@ export interface RoomApiResult {
   body: Record<string, unknown>;
 }
 
-/** Xử lý GET /api/room?game=...&code=...&sinceSeq=... (Adaptive polling + Fast HMGET delta) */
+/** Xử lý GET /api/room?game=...&code=...&sinceSeq=...&waitMs=... (Long-Polling tức thì + Fast HMGET delta) */
 export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
   const game = url.searchParams.get('game') || 'co-ty-phu';
   const code = url.searchParams.get('code') || '';
   const sinceSeq = Math.max(0, Number(url.searchParams.get('sinceSeq') || '0') || 0);
   const includeSnapshot = url.searchParams.get('full') === '1';
+  const rawWaitMs = Number(url.searchParams.get('waitMs') || '0') || 0;
+  const waitMs = includeSnapshot ? 0 : Math.max(0, Math.min(MAX_LONG_POLL_MS, Math.floor(rawWaitMs)));
 
   if (!isValidCode(code)) {
     return { status: 400, body: { ok: false, error: 'INVALID_CODE', message: 'Mã phòng phải gồm đúng 6 chữ số.' } };
   }
 
   const key = roomKey(game, code);
-  const currentSeq = await readRoomSeq(key);
+  let currentSeq = await readRoomSeq(key);
   if (currentSeq === null) {
     return {
       status: 404,
@@ -571,7 +674,54 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
     };
   }
 
-  // Không có thay đổi mới -> trả gọn nhẹ sau đúng 1 lệnh HGET duy nhất (~2ms tại Singapore)!
+  // Server-Side Long-Polling: giữ kết nối chờ tối đa `waitMs` (<= 3.5s) và trả ngay lập tức khi có nước đi mới!
+  if (!includeSnapshot && currentSeq <= sinceSeq && waitMs > 0) {
+    const deadline = Date.now() + waitMs;
+    const isRedis = Boolean(getUpstashRedis());
+
+    if (!isRedis) {
+      while (Date.now() < deadline) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await waitForMemoryRoomChange(key, remaining);
+        currentSeq = await readRoomSeq(key);
+        if (currentSeq === null) {
+          return {
+            status: 404,
+            body: {
+              ok: false,
+              error: 'ROOM_NOT_FOUND',
+              message: `Phòng #${code} đã đóng hoặc hết thời gian chờ.`,
+            },
+          };
+        }
+        if (currentSeq > sinceSeq) break;
+      }
+    } else {
+      let tick = 0;
+      while (Date.now() < deadline) {
+        const step = tick < 4 ? 85 : tick < 10 ? 130 : 190;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await sleepMs(Math.min(step, remaining));
+        tick += 1;
+        currentSeq = await readRoomSeq(key);
+        if (currentSeq === null) {
+          return {
+            status: 404,
+            body: {
+              ok: false,
+              error: 'ROOM_NOT_FOUND',
+              message: `Phòng #${code} đã đóng hoặc hết thời gian chờ.`,
+            },
+          };
+        }
+        if (currentSeq > sinceSeq) break;
+      }
+    }
+  }
+
+  // Không có thay đổi mới sau khi chờ -> trả gọn nhẹ
   if (!includeSnapshot && currentSeq <= sinceSeq) {
     return {
       status: 200,
@@ -584,8 +734,8 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
     };
   }
 
-  // Đường tắt siêu tốc khi máy khách chỉ cần lấy gói sự kiện mới (sinceSeq > 0 & !includeSnapshot) -> không tải 35KB snapshot!
-  if (!includeSnapshot && sinceSeq > 0 && currentSeq - sinceSeq <= 15) {
+  // Đường tắt siêu tốc khi máy khách chỉ cần lấy gói sự kiện mới (sinceSeq > 0 & !includeSnapshot) -> không tải snapshot!
+  if (!includeSnapshot && sinceSeq > 0 && currentSeq - sinceSeq <= 20) {
     const fastDelta = await readDeltaEventsFast(key, sinceSeq, currentSeq);
     if (fastDelta && fastDelta.events.length > 0) {
       return {
@@ -659,11 +809,17 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
         ? { ...initialSnapshot, roomCode: candidate, updatedAt: now }
         : null;
 
+      const initialPhase: RoomPhase =
+        initialSnapshot &&
+        (initialSnapshot.phase === 'PLAYING' || initialSnapshot.phase === 'DISSOLVED')
+          ? initialSnapshot.phase
+          : 'LOBBY';
+
       const doc: StoredRoomDocument = {
         game,
         roomCode: candidate,
         hostToken: senderToken,
-        phase: 'LOBBY',
+        phase: initialPhase,
         seq: 1,
         createdAt: now,
         updatedAt: now,
@@ -790,19 +946,12 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     doc.heartbeats[senderToken] = now;
     doc.updatedAt = now;
 
-    const humans = Array.isArray((doc.snapshot as { humans?: unknown[] } | null)?.humans)
-      ? ((doc.snapshot as {
-          humans: Array<{
-            playerToken?: string;
-            connected?: boolean;
-            disconnectedAt?: number | null;
-            botTakeover?: boolean;
-          }>;
-        }).humans)
-      : [];
-    const existingMember = humans.find((h) => h.playerToken === senderToken);
+    const membersList = extractSnapshotMembers(doc.snapshot);
+    const existingMember = membersList.find((h) => h.playerToken === senderToken);
 
     if (existingMember) {
+      const fullDoc = await readRoomDoc(key);
+      const recentEvents = fullDoc?.events ?? [];
       existingMember.connected = true;
       existingMember.disconnectedAt = null;
       existingMember.botTakeover = false;
@@ -825,6 +974,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
           seq: doc.seq,
           snapshot: doc.snapshot,
           heartbeats: doc.heartbeats,
+          events: recentEvents,
         },
       };
     }
@@ -867,6 +1017,38 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
         seq: doc.seq,
         snapshot: doc.snapshot,
         heartbeats: doc.heartbeats,
+      },
+    };
+  }
+
+  if (action === 'checkpoint') {
+    doc.heartbeats[senderToken] = now;
+    doc.updatedAt = now;
+
+    const isHost = senderToken === doc.hostToken;
+    const isPlayingMember = doc.phase === 'PLAYING' && isMemberToken(doc, senderToken);
+
+    if (payload.snapshot && typeof payload.snapshot === 'object' && (isHost || isPlayingMember)) {
+      const incomingSnapshot = payload.snapshot as Record<string, unknown>;
+      const currentVer = extractMatchVersion(doc.snapshot);
+      const incomingVer = extractMatchVersion(incomingSnapshot);
+
+      if (doc.phase !== 'PLAYING' || incomingVer >= currentVer) {
+        doc.snapshot = incomingSnapshot;
+        const snapPhase = incomingSnapshot.phase;
+        if (snapPhase === 'LOBBY' || snapPhase === 'PLAYING' || snapPhase === 'DISSOLVED') {
+          doc.phase = snapPhase;
+        }
+        await saveSnapshotCheckpointOnly(key, doc, senderToken, now);
+      }
+    }
+
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        seq: doc.seq,
+        phase: doc.phase,
       },
     };
   }

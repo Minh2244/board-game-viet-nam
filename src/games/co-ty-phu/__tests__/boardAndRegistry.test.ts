@@ -15,7 +15,7 @@ import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from '@/games/co-ty-phu/data/charac
 import { getLandmarkArtworkUrl } from '@/games/co-ty-phu/data/landmarkArtwork';
 
 describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
-  it('Khai báo đúng 5 tựa game với co-ty-phu và o-an-quan READY, 3 game còn lại COMING_SOON', () => {
+  it('Khai báo đủ 5 tựa game trong Sảnh và toàn bộ 5/5 game đã READY kèm lazy loader', () => {
     expect(GAME_CATALOG.map((g) => g.id)).toEqual([
       'co-ty-phu',
       'co-ca-ngua',
@@ -24,12 +24,11 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
       'o-an-quan',
     ]);
     const ready = GAME_CATALOG.filter((g) => g.status === 'READY');
-    expect(ready.map((g) => g.id)).toEqual(['co-ty-phu', 'o-an-quan']);
+    expect(ready).toHaveLength(5);
     expect(ready.every((g) => typeof g.loader === 'function')).toBe(true);
 
     const upcoming = GAME_CATALOG.filter((g) => g.status === 'COMING_SOON');
-    expect(upcoming).toHaveLength(3);
-    expect(upcoming.every((g) => g.loader === undefined)).toBe(true);
+    expect(upcoming).toHaveLength(0);
   });
 
   it('Đủ 52 ô bàn cờ chữ nhật 17x11, gồm 18 ô khung cố định (3 Cơ Hội / 3 Khí Vận / Thuế -200K dưới) và 34 ô đất chia 12 nhóm màu', () => {

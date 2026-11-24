@@ -1,6 +1,7 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
+import { isFastLaneDisabled } from '@/shared/network/onlineTransportConfig';
 import { CO_TY_PHU_CHARACTERS, LAND_COLORS } from '../data/characters';
-import { createInitialGameState } from '../engine/reducer';
+import { createInitialGameState, reduceGameAction } from '../engine/reducer';
 import type { CharacterId, GameAction, GameState, LandColorId, PlayerSlotDraft } from '../engine/types';
 
 export const ONLINE_DISCONNECT_GRACE_MS = 120_000; // 2 phút chờ kết nối lại trước khi Máy đánh thay
@@ -44,11 +45,17 @@ export interface PersistedOnlineSession {
   savedAt: number;
 }
 
+export interface DeckSyncPatch {
+  chanceDeck?: string[];
+  fateDeck?: string[];
+}
+
 export interface RemoteGameActionEvent {
   actionId: string;
   action: GameAction;
   rollPower: number;
-  resultingState: GameState;
+  resultingState?: GameState;
+  deckSync?: DeckSyncPatch;
   matchVersion: number;
 }
 
@@ -114,7 +121,8 @@ type WirePacket =
       actionId: string;
       action: GameAction;
       rollPower: number;
-      resultingState: GameState;
+      resultingState?: GameState;
+      deckSync?: DeckSyncPatch;
       matchVersion: number;
     }
   | {
@@ -297,6 +305,7 @@ async function apiGetRoom(
   code: string,
   sinceSeq: number,
   full = false,
+  waitMs = 0,
 ): Promise<{ status: number; data: ApiRoomResponse }> {
   const qs = new URLSearchParams({
     game: GAME_NAMESPACE,
@@ -304,6 +313,7 @@ async function apiGetRoom(
     sinceSeq: String(sinceSeq),
   });
   if (full) qs.set('full', '1');
+  if (!full && waitMs > 0) qs.set('waitMs', String(waitMs));
   const res = await fetch(`/api/room?${qs.toString()}`, { cache: 'no-store' });
   let data: ApiRoomResponse = {};
   try {
@@ -357,7 +367,8 @@ export class OnlineRoomClient {
   private pushChain: Promise<void> = Promise.resolve();
   private broadcastChan: BroadcastChannel | null = null;
   private rtcPeers = new Map<string, PeerChannelState>();
-  private lastChargeRedisSentAt = 0;
+  private lastChargeActive = false;
+  private checkpointTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: {
     roomCode: string;
@@ -475,7 +486,7 @@ export class OnlineRoomClient {
     // Nếu là thành viên cũ quay lại (F5 / rớt mạng vào lại) -> vào thẳng phòng/bàn cờ ngay lập tức!
     if (data.rejoined && data.snapshot) {
       this.isHost = data.hostToken === this.playerToken;
-      this.snapshot = data.snapshot;
+      this.snapshot = this.replayMissedActionsIntoSnapshot(data.snapshot, data.events);
       this.joinResolved = true;
       this.persistSession();
       this.callbacks.onStatusChange('READY', `Đã khôi phục phòng #${this.roomCode}`);
@@ -530,7 +541,7 @@ export class OnlineRoomClient {
     }
 
     this.isHost = data.hostToken === this.playerToken;
-    this.snapshot = data.snapshot;
+    this.snapshot = this.replayMissedActionsIntoSnapshot(data.snapshot, data.events);
     this.lastSeq = data.seq ?? 0;
     this.joinResolved = true;
     this.ingestHeartbeats(data.heartbeats);
@@ -542,10 +553,64 @@ export class OnlineRoomClient {
 
     // Chủ phòng đồng bộ snapshot mới nhất để các máy khác thấy ngay trạng thái trực tuyến
     if (this.isHost) {
-      this.broadcastSnapshot();
+      this.scheduleCheckpoint(150);
     }
 
     return this.snapshot;
+  }
+
+  private replayMissedActionsIntoSnapshot(
+    snap: OnlineRoomSnapshot,
+    events?: ApiEventRow[],
+  ): OnlineRoomSnapshot {
+    if (!snap.matchState || !Array.isArray(events) || events.length === 0) return snap;
+    let state = snap.matchState;
+    let ver = snap.matchVersion;
+    for (const row of events) {
+      const pkt = row?.packet;
+      if (!pkt || pkt.type !== 'ACTION_COMMIT' || pkt.matchVersion <= ver) continue;
+      if (this.seenActionIds.has(pkt.actionId)) continue;
+      this.seenActionIds.add(pkt.actionId);
+      const { state: reduced } = reduceGameAction(state, pkt.action);
+      state = pkt.resultingState
+        ? pkt.resultingState
+        : pkt.deckSync
+          ? {
+              ...reduced,
+              chanceDeck: pkt.deckSync.chanceDeck ?? reduced.chanceDeck,
+              fateDeck: pkt.deckSync.fateDeck ?? reduced.fateDeck,
+            }
+          : reduced;
+      ver = pkt.matchVersion;
+    }
+    return { ...snap, matchState: state, matchVersion: ver };
+  }
+
+  private hasOpenRtcPeer(): boolean {
+    if (isFastLaneDisabled()) return false;
+    for (const peer of this.rtcPeers.values()) {
+      if (peer.dc && peer.dc.readyState === 'open') return true;
+    }
+    return false;
+  }
+
+  private scheduleCheckpoint(delayMs = 1200): void {
+    if (this.destroyed || !this.snapshot) return;
+    if (this.checkpointTimer !== null) {
+      clearTimeout(this.checkpointTimer);
+    }
+    this.checkpointTimer = setTimeout(() => {
+      this.checkpointTimer = null;
+      if (this.destroyed || !this.snapshot) return;
+      const snapClone = structuredClone(this.snapshot);
+      void apiPostRoom({
+        action: 'checkpoint',
+        game: GAME_NAMESPACE,
+        roomCode: this.roomCode,
+        senderToken: this.playerToken,
+        snapshot: snapClone,
+      }).catch(() => {});
+    }, delayMs);
   }
 
   private persistSession(): void {
@@ -559,10 +624,10 @@ export class OnlineRoomClient {
   }
 
   private getAdaptivePollIntervalMs(): number {
-    if (!this.joinResolved) return 220; // Đang chờ duyệt vào phòng -> poll cực nhanh 0.22s
-    if (typeof document !== 'undefined' && document.hidden) return 3600; // Ẩn tab -> tiết kiệm quota Redis
-    if (this.snapshot?.phase === 'PLAYING') return 180; // Đang trong ván -> đồng bộ Singapore sin1 siêu tốc 0.18s (kết hợp P2P DataChannel ~15ms!)
-    return 480; // Đang ở sảnh phòng chờ -> phản hồi đổi nhân vật/màu đất ~0.48s
+    if (!this.joinResolved) return 60;
+    if (typeof document !== 'undefined' && document.hidden) return 3600;
+    if (this.hasOpenRtcPeer()) return 2200; // P2P WebRTC đang mở (<25ms) -> giãn HTTP dự phòng tiết kiệm Redis!
+    return 25; // Long-Polling vừa trả kết quả -> nối lại ngay lập tức (không ngủ 180ms!)
   }
 
   private startSyncLoops(): void {
@@ -663,17 +728,31 @@ export class OnlineRoomClient {
 
   private async pollOnce(): Promise<void> {
     if (this.destroyed || this.pollInFlight) {
-      this.scheduleNextPoll();
       return;
     }
     this.pollInFlight = true;
+    let hadError = false;
     try {
-      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved);
+      const hidden = typeof document !== 'undefined' && document.hidden;
+      const useLongPoll = !hidden && !this.hasOpenRtcPeer();
+      const waitMs = !this.joinResolved
+        ? 1500
+        : useLongPoll
+          ? this.snapshot?.phase === 'PLAYING'
+            ? 3000
+            : 2500
+          : 0;
+      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved, waitMs);
       if (this.destroyed) return;
 
       if (status === 404 || status === 410 || data.phase === 'DISSOLVED') {
+        const disEvt = Array.isArray(data.events)
+          ? data.events.find((r) => r.packet?.type === 'DISSOLVE_ROOM')?.packet
+          : undefined;
+        const customReason =
+          disEvt && disEvt.type === 'DISSOLVE_ROOM' && disEvt.reason ? disEvt.reason : undefined;
         clearPersistedOnlineSession();
-        this.callbacks.onRoomClosed(data.message || 'Phòng Online đã được giải tán.');
+        this.callbacks.onRoomClosed(customReason || data.message || 'Phòng Online đã được giải tán.');
         this.destroy();
         return;
       }
@@ -710,6 +789,7 @@ export class OnlineRoomClient {
         }
       }
     } catch {
+      hadError = true;
       if (!this.destroyed) {
         this.consecutivePollErrors += 1;
         if (this.consecutivePollErrors >= 2) {
@@ -719,7 +799,7 @@ export class OnlineRoomClient {
     } finally {
       this.pollInFlight = false;
       if (!this.destroyed) {
-        this.scheduleNextPoll();
+        this.scheduleNextPoll(hadError ? 750 : undefined);
       }
     }
   }
@@ -851,23 +931,37 @@ export class OnlineRoomClient {
           oldest.forEach((id) => this.seenActionIds.delete(id));
         }
 
-        // Lưu ngầm snapshot mới nhất để an toàn khi F5, nhưng KHÔNG gọi emitSnapshot() trước onRemoteAction
-        // để tránh nhảy cóc trạng thái bàn cờ trước khi hoạt ảnh tung xúc xắc & bước nhảy bắt đầu!
-        if (this.snapshot) {
+        // Tính state xác định 100% từ gói Delta ~180B để lưu ngầm dự phòng F5 (KHÔNG emitSnapshot sớm để giữ trọn hoạt ảnh!)
+        let resolvedNext = packet.resultingState;
+        if (!resolvedNext && this.snapshot?.matchState) {
+          const { state: reduced } = reduceGameAction(this.snapshot.matchState, packet.action);
+          resolvedNext = packet.deckSync
+            ? {
+                ...reduced,
+                chanceDeck: packet.deckSync.chanceDeck ?? reduced.chanceDeck,
+                fateDeck: packet.deckSync.fateDeck ?? reduced.fateDeck,
+              }
+            : reduced;
+        }
+        if (this.snapshot && resolvedNext) {
           this.snapshot = {
             ...this.snapshot,
             phase: 'PLAYING',
-            matchState: packet.resultingState,
+            matchState: resolvedNext,
             matchVersion: Math.max(this.snapshot.matchVersion, packet.matchVersion),
             updatedAt: Date.now(),
           };
+          if (this.isHost) {
+            this.scheduleCheckpoint();
+          }
         }
 
         this.callbacks.onRemoteAction({
           actionId: packet.actionId,
           action: packet.action,
           rollPower: packet.rollPower,
-          resultingState: packet.resultingState,
+          resultingState: resolvedNext,
+          deckSync: packet.deckSync,
           matchVersion: packet.matchVersion,
         });
         break;
@@ -1099,7 +1193,7 @@ export class OnlineRoomClient {
     return initialState;
   }
 
-  /** Phát nước đi đã thực thi lên máy chủ Redis để mọi người đồng bộ + an toàn tuyệt đối khi F5 */
+  /** Phát nước đi siêu nhẹ dạng Delta (~180 byte) qua đường tắt pushEventOnlyFast (~3ms) + Checkpoint F5 ngầm */
   public broadcastCommittedAction(
     action: GameAction,
     rollPower: number,
@@ -1109,6 +1203,20 @@ export class OnlineRoomClient {
     const actionId = generateRandomId('act');
     this.seenActionIds.add(actionId);
     const nextVer = this.snapshot.matchVersion + 1;
+
+    // Chỉ đính kèm `deckSync` khi bộ bài vừa xáo lại (hiếm: ~12 lá mới có 1 lần) để đảm bảo 2 máy khớp 100%!
+    const prevState = this.snapshot.matchState;
+    let deckSync: DeckSyncPatch | undefined;
+    if (prevState) {
+      const chanceReshuffled = resultingState.chanceDeck.length > prevState.chanceDeck.length;
+      const fateReshuffled = resultingState.fateDeck.length > prevState.fateDeck.length;
+      if (chanceReshuffled || fateReshuffled) {
+        deckSync = {
+          ...(chanceReshuffled ? { chanceDeck: [...resultingState.chanceDeck] } : {}),
+          ...(fateReshuffled ? { fateDeck: [...resultingState.fateDeck] } : {}),
+        };
+      }
+    }
 
     this.snapshot = {
       ...this.snapshot,
@@ -1125,14 +1233,15 @@ export class OnlineRoomClient {
       actionId,
       action,
       rollPower,
-      resultingState,
+      ...(deckSync ? { deckSync } : {}),
       matchVersion: nextVer,
     };
 
-    this.pushPacket(packet, this.snapshot);
+    this.pushFastEventOnly(packet, true);
+    this.scheduleCheckpoint();
   }
 
-  /** Phát tín hiệu đang nhấn giữ gồng/lắc xúc xắc giữa không trung để mọi máy cùng thấy xúc xắc bay lên rung lắc */
+  /** Phát tín hiệu đang nhấn giữ gồng/lắc xúc xắc: tức thì qua P2P, còn Redis chỉ gửi khi BẮT ĐẦU / KẾT THÚC để không nghẽn đường truyền! */
   public broadcastDiceCharge(
     playerId: string,
     playerName: string,
@@ -1140,7 +1249,6 @@ export class OnlineRoomClient {
     charge01: number,
   ): void {
     if (this.destroyed || !this.snapshot) return;
-    const now = Date.now();
     const packet: WirePacket = {
       msgId: generateRandomId('chg'),
       senderToken: this.playerToken,
@@ -1151,13 +1259,9 @@ export class OnlineRoomClient {
       charge01: Math.round(charge01 * 100) / 100,
     };
 
-    // Luôn bắn tức thì (0ms) qua P2P DataChannel & BroadcastChannel;
-    // đồng thời gửi qua Redis Singapore mỗi ~180ms (hoặc ngay khi bắt đầu/kết thúc gồng) cho các máy đang đi qua 4G/NAT
-    const shouldPushRedis = !active || now - this.lastChargeRedisSentAt >= 180;
-    if (shouldPushRedis) {
-      this.lastChargeRedisSentAt = now;
-    }
-    this.pushFastEventOnly(packet, shouldPushRedis);
+    const edgeTransition = active !== this.lastChargeActive;
+    this.lastChargeActive = active;
+    this.pushFastEventOnly(packet, edgeTransition);
   }
 
   /** Giải tán phòng (Chủ phòng) hoặc Rời phòng (Khách) */
@@ -1212,6 +1316,10 @@ export class OnlineRoomClient {
       clearInterval(this.graceCheckTimer);
       this.graceCheckTimer = null;
     }
+    if (this.checkpointTimer !== null) {
+      clearTimeout(this.checkpointTimer);
+      this.checkpointTimer = null;
+    }
     if (typeof document !== 'undefined' && this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
@@ -1260,7 +1368,7 @@ export class OnlineRoomClient {
   }
 
   private initFastLanes(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || isFastLaneDisabled()) return;
     if (!this.broadcastChan && typeof BroadcastChannel !== 'undefined') {
       try {
         this.broadcastChan = new BroadcastChannel(`bgvn_fast_${this.roomCode}`);
@@ -1279,7 +1387,7 @@ export class OnlineRoomClient {
   }
 
   private ensureRtcPeers(): void {
-    if (this.destroyed || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
+    if (this.destroyed || isFastLaneDisabled() || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
     const activeTokens = new Set<string>();
     for (const h of this.snapshot.humans) {
       if (h.playerToken === this.playerToken || !h.connected) continue;
