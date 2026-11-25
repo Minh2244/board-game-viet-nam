@@ -1,5 +1,5 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
-import { playerOwnsFullColorGroup } from './rules';
+import { getUpgradeCost, playerOwnsFullColorGroup } from './rules';
 import type { GameState, PlayerState } from './types';
 
 /** Ngưỡng rollPower (từ handleCenterPointerUp) tương ứng giữ thanh lực >= 90% */
@@ -35,10 +35,14 @@ function pickWeighted<T>(items: readonly T[], weights: readonly number[]): T {
 
 /**
  * Gói A — Trọng số ô đích (chỉ áp dụng âm thầm cho Người chơi thật; Máy AI luôn 100% random):
- * - Đất trống (mua được) / Nhà bản thân chưa max cấp: x1.8 (Anti-Streak: x2.4)
- * - Cơ Hội / Khí Vận / Sân Bay / Di Sản / Bến Xe & Thủy Điện trống: x1.5 (Anti-Streak: x1.75)
+ * - Nhà bản thân chưa max cấp (đủ tiền nâng cấp): x2.35 (Anti-Streak: x2.8) — dễ đạp lại để nâng nhà & Biệt Thự!
+ * - Ô Sân Bay (AIRPORT): x2.3 (Anti-Streak: x2.6) — bay khắp bàn + nhận +3 Tr đẩy nhịp trận!
+ * - Đất trống (mua được): x1.8 (Anti-Streak: x2.4)
+ * - Cơ Hội / Khí Vận (nay cân bằng 50/50): x1.25 (Anti-Streak: x1.35)
+ * - Di Sản / Bến Xe & Thủy Điện trống: x1.5 (Anti-Streak: x1.75)
  * - Ô trung tính (START, Trại Giam trống, nhà mình đã max cấp): x1.0
- * - Thuế / Vô Tù / Thăm tù mất phí: x0.75 (Anti-Streak: x0.60)
+ * - Vô Tù (GO_TO_JAIL): x0.55 (Anti-Streak: x0.40) — giảm cảm giác xui đạp ô góc tù liên tục
+ * - Thuế / Thăm tù mất phí: x0.75 (Anti-Streak: x0.60)
  * - Nhà / Bến Xe / Thủy Điện của đối thủ đang thu tiền thuê:
  *     + Nhà cấp cao (>= 3) hoặc đã gom đủ bộ màu x2: x0.42 (Anti-Streak: x0.18)
  *     + Nhà cấp 1–2 / Bến Xe / Thủy Điện đối thủ: x0.50 (Anti-Streak: x0.22)
@@ -65,7 +69,11 @@ export function getHumanLandingTileWeight(
 
       if (tile.ownerId === player.id) {
         if (tile.buildingLevel < 5) {
-          return antiStreakActive ? 2.4 : 1.8;
+          const upgradeCost = getUpgradeCost(tile);
+          if (player.cash >= upgradeCost) {
+            return antiStreakActive ? 2.8 : 2.35;
+          }
+          return antiStreakActive ? 1.4 : 1.2;
         }
         return 1.0;
       }
@@ -88,9 +96,13 @@ export function getHumanLandingTileWeight(
       return antiStreakActive ? 0.22 : 0.5;
     }
 
+    case 'AIRPORT':
+      return antiStreakActive ? 2.6 : 2.3;
+
     case 'CHANCE':
     case 'FATE':
-    case 'AIRPORT':
+      return antiStreakActive ? 1.35 : 1.25;
+
     case 'HERITAGE':
       return antiStreakActive ? 1.75 : 1.5;
 
@@ -123,8 +135,10 @@ export function getHumanLandingTileWeight(
       return antiStreakActive ? 0.22 : 0.5;
     }
 
-    case 'TAX':
     case 'GO_TO_JAIL':
+      return antiStreakActive ? 0.4 : 0.55;
+
+    case 'TAX':
       return antiStreakActive ? 0.6 : 0.75;
 
     case 'VISIT_JAIL': {

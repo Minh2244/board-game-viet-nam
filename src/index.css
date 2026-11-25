@@ -48,14 +48,14 @@
   }
 }
 
-/* Hào quang vàng kim cho cụm 3 ô đất cùng nhóm đã gom trọn bộ (×2 tiền thuê) */
+/* Hào quang vàng kim cho cụm 3 ô đất cùng nhóm đã gom trọn bộ (×2 tiền thuê) — thuần GPU opacity, không repaint box-shadow */
 @keyframes monopolyShimmer {
   0%,
   100% {
-    box-shadow: inset 0 0 0 2px rgba(253, 224, 71, 0.85), 0 0 8px rgba(250, 204, 21, 0.45);
+    opacity: 0.45;
   }
   50% {
-    box-shadow: inset 0 0 0 2.5px rgba(254, 240, 138, 1), 0 0 15px rgba(250, 204, 21, 0.8);
+    opacity: 1;
   }
 }
 
@@ -306,7 +306,17 @@
   }
 
   .animate-monopoly-glow {
+    position: relative;
+  }
+  .animate-monopoly-glow::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 2.5px rgba(254, 240, 138, 0.98), 0 0 14px rgba(250, 204, 21, 0.78);
     animation: monopolyShimmer 2.4s ease-in-out infinite;
+    will-change: opacity;
   }
 
   .animate-house-pop {
@@ -471,39 +481,16 @@
   }
 }
 
-/* Chế độ Mượt cho Điện thoại / Máy yếu (đặt ngoài @layer để luôn thắng tuyệt đối trên GPU di động) */
-[data-smooth-mode="true"] [class*="backdrop-blur"],
-[data-mobile-lite="true"] [class*="backdrop-blur"] {
+/* Cách ly paint/layout cho 52 ô đất & bàn cờ (giữ nguyên 100% đồ họa & hiệu ứng trên cả PC lẫn Điện thoại!) */
+[data-tile-index] {
+  contain: layout style paint;
+}
+
+/* Chế độ Tiết Kiệm Pin tùy chọn (CHỈ kích hoạt khi người chơi tự bấm nút bật thủ công, mặc định TẮT để giữ 100% đồ họa) */
+[data-smooth-mode="true"] [class*="backdrop-blur"] {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
-[data-smooth-mode="true"] [class*="drop-shadow"],
-[data-mobile-lite="true"] [class*="drop-shadow"] {
-  filter: none !important;
-}
-[data-mobile-lite="true"] .animate-hub-card,
-[data-mobile-lite="true"] .animate-bounce,
-[data-mobile-lite="true"] .animate-tap-ring,
-[data-mobile-lite="true"] .animate-ping,
-[data-mobile-lite="true"] .animate-cash-arc,
-[data-mobile-lite="true"] .animate-standee-idle,
-[data-mobile-lite="true"] .animate-monopoly-glow,
-[data-mobile-lite="true"] .drum-spin-slow,
-[data-smooth-mode="true"] .animate-ping,
-[data-smooth-mode="true"] .animate-cash-arc,
-[data-smooth-mode="true"] .animate-standee-idle,
-[data-smooth-mode="true"] .animate-monopoly-glow,
-[data-smooth-mode="true"] .drum-spin-slow {
-  animation: none !important;
-}
-[data-mobile-lite="true"] .mobile-flat-shadow {
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36) !important;
-}
-[data-smooth-mode="true"] .smooth-hide-blur,
-[data-mobile-lite="true"] .smooth-hide-blur {
+[data-smooth-mode="true"] .smooth-hide-blur {
   display: none !important;
-}
-[data-smooth-mode="true"] [data-tile-index],
-[data-mobile-lite="true"] [data-tile-index] {
-  contain: layout style paint;
 }

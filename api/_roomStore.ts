@@ -33,6 +33,11 @@ const EV_FIELD_PREFIX = 'ev:';
 
 let cachedRedis: Redis | null | undefined;
 
+/** Cho phép bộ unit test tiêm Redis giả lập để kiểm thử trực tiếp nhánh Upstash Lua nguyên tử */
+export function __setUpstashRedisForTest(client: Redis | null | undefined): void {
+  cachedRedis = client;
+}
+
 function getUpstashRedis(): Redis | null {
   if (cachedRedis !== undefined) return cachedRedis;
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
@@ -44,6 +49,70 @@ function getUpstashRedis(): Redis | null {
   cachedRedis = new Redis({ url, token });
   return cachedRedis;
 }
+
+/**
+ * 3 Lua script nguyên tử chạy 1 round-trip duy nhất trên Upstash Redis:
+ * - Loại bỏ 100% cửa sổ race condition giữa `HINCRBY seq` và `HSET ev:<seq>` dưới Long-Polling.
+ * - Chặn tạo key khống khi phòng đã hết hạn và chặn hồi sinh phòng đã `DISSOLVED`.
+ * - Tự giữ TTL chuẩn theo đúng `phase` (`LOBBY` 15 phút / `PLAYING` 30 phút / `DISSOLVED` 60 giây).
+ */
+const PUSH_EVENT_ONLY_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+local phase = redis.call('HGET', KEYS[1], 'phase')
+if phase == 'DISSOLVED' then
+  return -2
+end
+local nextSeq = redis.call('HINCRBY', KEYS[1], 'seq', 1)
+local evJson = '{"seq":' .. tostring(nextSeq) .. ',"sentAt":' .. ARGV[2] .. ',"senderToken":' .. ARGV[4] .. ',"packet":' .. ARGV[3] .. '}'
+redis.call('HSET', KEYS[1], ARGV[6] .. tostring(nextSeq), evJson, ARGV[1], ARGV[2])
+local maxEv = tonumber(ARGV[5])
+if nextSeq > maxEv then
+  redis.call('HDEL', KEYS[1], ARGV[6] .. tostring(nextSeq - maxEv))
+end
+local ttl = tonumber(ARGV[7])
+if phase == 'PLAYING' then
+  ttl = tonumber(ARGV[8])
+end
+redis.call('EXPIRE', KEYS[1], ttl)
+return nextSeq
+`;
+
+const COMMIT_UPDATE_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+local curPhase = redis.call('HGET', KEYS[1], 'phase')
+if curPhase == 'DISSOLVED' and ARGV[2] ~= '1' then
+  return -2
+end
+local nextSeq = redis.call('HINCRBY', KEYS[1], 'seq', 1)
+redis.call('HSET', KEYS[1], 'phase', ARGV[1], 'data', ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7])
+if ARGV[8] ~= '' then
+  local evJson = '{"seq":' .. tostring(nextSeq) .. ',"sentAt":' .. ARGV[7] .. ',"senderToken":' .. ARGV[9] .. ',"packet":' .. ARGV[8] .. '}'
+  redis.call('HSET', KEYS[1], ARGV[11] .. tostring(nextSeq), evJson)
+  local maxEv = tonumber(ARGV[10])
+  if nextSeq > maxEv then
+    redis.call('HDEL', KEYS[1], ARGV[11] .. tostring(nextSeq - maxEv))
+  end
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[12]))
+return nextSeq
+`;
+
+const SAVE_CHECKPOINT_LUA = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return -1
+end
+local curPhase = redis.call('HGET', KEYS[1], 'phase')
+if curPhase == 'DISSOLVED' then
+  return -2
+end
+redis.call('HSET', KEYS[1], 'phase', ARGV[1], 'data', ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[7]))
+return tonumber(redis.call('HGET', KEYS[1], 'seq') or '1')
+`;
 
 // Bộ nhớ tạm cho môi trường local dev/preview (khi chưa cấu hình biến môi trường Upstash)
 interface MemoryEntry {
@@ -249,17 +318,23 @@ function isMemberToken(doc: StoredRoomDocument, token: string): boolean {
   return list.some((m) => m.playerToken === token);
 }
 
-async function readRoomSeq(key: string): Promise<number | null> {
+async function readRoomSeqAndPhase(
+  key: string,
+): Promise<{ seq: number; phase: RoomPhase } | null> {
   const redis = getUpstashRedis();
   if (redis) {
-    const val = await redis.hget<string | number>(key, 'seq');
-    if (val === null || val === undefined) return null;
-    const parsed = Number(val);
-    return Number.isFinite(parsed) ? parsed : null;
+    const raw = await redis.hmget<Record<string, unknown>>(key, 'seq', 'phase');
+    if (!raw || raw.seq === null || raw.seq === undefined) return null;
+    const seq = Number(raw.seq);
+    if (!Number.isFinite(seq)) return null;
+    const phase: RoomPhase =
+      raw.phase === 'PLAYING' || raw.phase === 'DISSOLVED' ? raw.phase : 'LOBBY';
+    return { seq, phase };
   }
   cleanExpiredMemory();
   const entry = memoryRooms.get(key);
-  return entry ? entry.doc.seq : null;
+  if (!entry) return null;
+  return { seq: entry.doc.seq, phase: entry.doc.phase };
 }
 
 /**
@@ -379,46 +454,49 @@ async function readRoomDoc(key: string): Promise<StoredRoomDocument | null> {
   return cloned;
 }
 
+type AtomicMutationResult =
+  | { ok: true; seq: number }
+  | { ok: false; reason: 'NOT_FOUND' | 'DISSOLVED' };
+
 /**
- * Đường tắt siêu tốc cho gói tin sự kiện thuần (như `DICE_CHARGE`, `RTC_SIGNAL`, hoặc `push` không kèm `snapshot`):
- * Không cần tải 35KB `data` bằng `hgetall`! Chỉ chạy `HINCRBY` + `HSET ev:<seq>` trong ~3ms!
+ * Đường tắt siêu tốc cho gói tin sự kiện thuần (như `ACTION_COMMIT`, `DICE_CHARGE`, `RTC_SIGNAL`):
+ * Chạy 1 Lua script nguyên tử duy nhất trên Upstash (kiểm tra EXISTS & phase ~= DISSOLVED + HINCRBY + HSET ev:<seq> + EXPIRE).
+ * Loại bỏ 100% cửa sổ race condition khiến Long-Polling đọc `seq` mới trước khi `ev:<seq>` tồn tại!
  */
 async function pushEventOnlyFast(
   key: string,
   senderToken: string,
   now: number,
   packet: Record<string, unknown>,
-): Promise<number | null> {
+): Promise<AtomicMutationResult> {
   const redis = getUpstashRedis();
   if (redis) {
-    const allocatedSeq = await redis.hincrby(key, 'seq', 1);
-    if (allocatedSeq <= 1) {
-      // Phòng không tồn tại (vừa tạo khống key) -> xóa ngay và báo null
-      await redis.del(key);
-      return null;
+    const res = Number(
+      await redis.eval(
+        PUSH_EVENT_ONLY_LUA,
+        [key],
+        [
+          `${HB_FIELD_PREFIX}${senderToken}`,
+          String(now),
+          JSON.stringify(packet),
+          JSON.stringify(senderToken),
+          String(MAX_EVENTS_KEPT),
+          EV_FIELD_PREFIX,
+          String(LOBBY_TTL_SEC),
+          String(PLAYING_TTL_SEC),
+        ],
+      ),
+    );
+    if (res === -1 || !Number.isFinite(res) || res <= 0) {
+      return { ok: false, reason: res === -2 ? 'DISSOLVED' : 'NOT_FOUND' };
     }
-    const eventRecord: RoomEventRecord = {
-      seq: allocatedSeq,
-      sentAt: now,
-      senderToken,
-      packet,
-    };
-    const pipe = redis.pipeline();
-    pipe.hset(key, {
-      [`${EV_FIELD_PREFIX}${allocatedSeq}`]: JSON.stringify(eventRecord),
-      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
-    });
-    if (allocatedSeq > MAX_EVENTS_KEPT) {
-      pipe.hdel(key, `${EV_FIELD_PREFIX}${allocatedSeq - MAX_EVENTS_KEPT}`);
-    }
-    pipe.expire(key, PLAYING_TTL_SEC);
-    await pipe.exec();
-    return allocatedSeq;
+    return { ok: true, seq: res };
   }
 
   cleanExpiredMemory();
   const entry = memoryRooms.get(key);
-  if (!entry || entry.doc.phase === 'DISSOLVED') return null;
+  if (!entry) return { ok: false, reason: 'NOT_FOUND' };
+  if (entry.doc.phase === 'DISSOLVED') return { ok: false, reason: 'DISSOLVED' };
   const nextSeq = entry.doc.seq + 1;
   entry.doc.seq = nextSeq;
   entry.doc.updatedAt = now;
@@ -434,14 +512,14 @@ async function pushEventOnlyFast(
     entry.eventsBySeq.delete(nextSeq - MAX_EVENTS_KEPT);
   }
   entry.doc.events = [];
+  entry.expiresAt = now + ttlForPhase(entry.doc.phase) * 1000;
   notifyMemoryWaiters(key);
-  return nextSeq;
+  return { ok: true, seq: nextSeq };
 }
 
 /**
- * Cấp số thứ tự `seq` nguyên tử bằng HINCRBY và lưu sự kiện vào field riêng `ev:<seq>`.
- * QUAN TRỌNG: Tuyệt đối KHÔNG nhồi mảng `doc.events` (vốn chứa hàng chục bản sao `resultingState`) vào trường `data`
- * để giữ kích thước `data` luôn gọn ~18KB thay vì phình lên >2MB sau 100-200 lượt!
+ * Cấp số thứ tự `seq` nguyên tử + ghi snapshot `data` + sự kiện `ev:<seq>` trong 1 Lua script duy nhất.
+ * QUAN TRỌNG: Tuyệt đối KHÔNG nhồi mảng `doc.events` vào `data` để giữ dung lượng luôn gọn ~18KB!
  */
 async function commitRoomUpdateAtomic(
   key: string,
@@ -449,55 +527,54 @@ async function commitRoomUpdateAtomic(
   senderToken: string,
   now: number,
   newPacket?: Record<string, unknown> | null,
-): Promise<number> {
+  allowIfDissolved = false,
+): Promise<AtomicMutationResult> {
   const ttl = ttlForPhase(doc.phase);
   const nextHeartbeats = mergeHeartbeats(doc.heartbeats, { [senderToken]: now });
   doc.heartbeats = nextHeartbeats;
 
   const redis = getUpstashRedis();
   if (redis) {
-    const allocatedSeq = await redis.hincrby(key, 'seq', 1);
-    doc.seq = allocatedSeq;
-
-    const eventRecord: RoomEventRecord | null = newPacket
-      ? {
-          seq: allocatedSeq,
-          sentAt: now,
-          senderToken,
-          packet: newPacket,
-        }
-      : null;
-
-    // Lưu bản nhẹ không đính kèm `events` trong `data` (mọi sự kiện delta đã nằm riêng tại `ev:<seq>`)
     const slimDocForData: StoredRoomDocument = {
       ...doc,
       events: [],
     };
-
-    const fields: Record<string, string> = {
-      phase: doc.phase,
-      data: JSON.stringify(slimDocForData),
-      [HB_MAP_FIELD]: JSON.stringify(nextHeartbeats),
-      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
-    };
-    if (eventRecord) {
-      fields[`${EV_FIELD_PREFIX}${allocatedSeq}`] = JSON.stringify(eventRecord);
+    const res = Number(
+      await redis.eval(
+        COMMIT_UPDATE_LUA,
+        [key],
+        [
+          doc.phase,
+          allowIfDissolved ? '1' : '0',
+          JSON.stringify(slimDocForData),
+          HB_MAP_FIELD,
+          JSON.stringify(nextHeartbeats),
+          `${HB_FIELD_PREFIX}${senderToken}`,
+          String(now),
+          newPacket ? JSON.stringify(newPacket) : '',
+          JSON.stringify(senderToken),
+          String(MAX_EVENTS_KEPT),
+          EV_FIELD_PREFIX,
+          String(ttl),
+        ],
+      ),
+    );
+    if (res === -1 || !Number.isFinite(res) || res <= 0) {
+      return { ok: false, reason: res === -2 ? 'DISSOLVED' : 'NOT_FOUND' };
     }
-
-    const pipe = redis.pipeline();
-    pipe.hset(key, fields);
-    if (allocatedSeq > MAX_EVENTS_KEPT) {
-      pipe.hdel(key, `${EV_FIELD_PREFIX}${allocatedSeq - MAX_EVENTS_KEPT}`);
-    }
-    pipe.expire(key, ttl);
-    await pipe.exec();
-    return allocatedSeq;
+    doc.seq = res;
+    return { ok: true, seq: res };
   }
 
+  cleanExpiredMemory();
   const existing = memoryRooms.get(key);
-  const nextSeq = (existing?.doc.seq ?? doc.seq) + 1;
+  if (!existing) return { ok: false, reason: 'NOT_FOUND' };
+  if (existing.doc.phase === 'DISSOLVED' && !allowIfDissolved) {
+    return { ok: false, reason: 'DISSOLVED' };
+  }
+  const nextSeq = (existing.doc.seq ?? doc.seq) + 1;
   doc.seq = nextSeq;
-  const eventsBySeq = existing?.eventsBySeq ?? new Map<number, RoomEventRecord>();
+  const eventsBySeq = existing.eventsBySeq ?? new Map<number, RoomEventRecord>();
 
   if (newPacket) {
     const ev: RoomEventRecord = {
@@ -514,7 +591,7 @@ async function commitRoomUpdateAtomic(
 
   // Giữ `doc.events` rỗng trong snapshot gốc (các sự kiện live đọc từ `eventsBySeq`)
   doc.events = [];
-  const heartbeats = mergeHeartbeats(existing?.heartbeats, doc.heartbeats, { [senderToken]: now });
+  const heartbeats = mergeHeartbeats(existing.heartbeats, doc.heartbeats, { [senderToken]: now });
   doc.heartbeats = heartbeats;
 
   memoryRooms.set(key, {
@@ -524,18 +601,19 @@ async function commitRoomUpdateAtomic(
     expiresAt: Date.now() + ttl * 1000,
   });
   notifyMemoryWaiters(key);
-  return nextSeq;
+  return { ok: true, seq: nextSeq };
 }
 
 /**
- * Lưu checkpoint snapshot dự phòng F5 ngầm (KHÔNG tăng `seq` nên không đánh thức Long-Polling vô ích).
+ * Lưu checkpoint snapshot dự phòng F5 ngầm nguyên tử (KHÔNG tăng `seq` nên không đánh thức Long-Polling vô ích,
+ * đồng thời không bao giờ ghi đè hồi sinh phòng đã `DISSOLVED`).
  */
 async function saveSnapshotCheckpointOnly(
   key: string,
   doc: StoredRoomDocument,
   senderToken: string,
   now: number,
-): Promise<void> {
+): Promise<AtomicMutationResult> {
   const ttl = ttlForPhase(doc.phase);
   const nextHeartbeats = mergeHeartbeats(doc.heartbeats, { [senderToken]: now });
   doc.heartbeats = nextHeartbeats;
@@ -543,25 +621,38 @@ async function saveSnapshotCheckpointOnly(
   const redis = getUpstashRedis();
   if (redis) {
     const slimDocForData: StoredRoomDocument = { ...doc, events: [] };
-    const pipe = redis.pipeline();
-    pipe.hset(key, {
-      phase: doc.phase,
-      data: JSON.stringify(slimDocForData),
-      [HB_MAP_FIELD]: JSON.stringify(nextHeartbeats),
-      [`${HB_FIELD_PREFIX}${senderToken}`]: String(now),
-    });
-    pipe.expire(key, ttl);
-    await pipe.exec();
-    return;
+    const res = Number(
+      await redis.eval(
+        SAVE_CHECKPOINT_LUA,
+        [key],
+        [
+          doc.phase,
+          JSON.stringify(slimDocForData),
+          HB_MAP_FIELD,
+          JSON.stringify(nextHeartbeats),
+          `${HB_FIELD_PREFIX}${senderToken}`,
+          String(now),
+          String(ttl),
+        ],
+      ),
+    );
+    if (res === -1 || !Number.isFinite(res) || res <= 0) {
+      return { ok: false, reason: res === -2 ? 'DISSOLVED' : 'NOT_FOUND' };
+    }
+    doc.seq = res;
+    return { ok: true, seq: res };
   }
 
+  cleanExpiredMemory();
   const existing = memoryRooms.get(key);
-  if (!existing) return;
+  if (!existing) return { ok: false, reason: 'NOT_FOUND' };
+  if (existing.doc.phase === 'DISSOLVED') return { ok: false, reason: 'DISSOLVED' };
   doc.events = [];
   doc.seq = existing.doc.seq;
   existing.doc = structuredClone(doc);
   existing.heartbeats = mergeHeartbeats(existing.heartbeats, nextHeartbeats);
   existing.expiresAt = Date.now() + ttl * 1000;
+  return { ok: true, seq: existing.doc.seq };
 }
 
 /**
@@ -662,8 +753,8 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
   }
 
   const key = roomKey(game, code);
-  let currentSeq = await readRoomSeq(key);
-  if (currentSeq === null) {
+  let roomMeta = await readRoomSeqAndPhase(key);
+  if (!roomMeta) {
     return {
       status: 404,
       body: {
@@ -674,8 +765,8 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
     };
   }
 
-  // Server-Side Long-Polling: giữ kết nối chờ tối đa `waitMs` (<= 3.5s) và trả ngay lập tức khi có nước đi mới!
-  if (!includeSnapshot && currentSeq <= sinceSeq && waitMs > 0) {
+  // Server-Side Long-Polling: giữ kết nối chờ tối đa `waitMs` (<= 3.5s) và trả ngay lập tức khi có nước đi mới hoặc phòng vừa giải tán!
+  if (!includeSnapshot && roomMeta.phase !== 'DISSOLVED' && roomMeta.seq <= sinceSeq && waitMs > 0) {
     const deadline = Date.now() + waitMs;
     const isRedis = Boolean(getUpstashRedis());
 
@@ -684,8 +775,8 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         await waitForMemoryRoomChange(key, remaining);
-        currentSeq = await readRoomSeq(key);
-        if (currentSeq === null) {
+        roomMeta = await readRoomSeqAndPhase(key);
+        if (!roomMeta) {
           return {
             status: 404,
             body: {
@@ -695,18 +786,19 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
             },
           };
         }
-        if (currentSeq > sinceSeq) break;
+        if (roomMeta.phase === 'DISSOLVED' || roomMeta.seq > sinceSeq) break;
       }
     } else {
       let tick = 0;
       while (Date.now() < deadline) {
-        const step = tick < 4 ? 85 : tick < 10 ? 130 : 190;
+        // Nhịp bước thông minh (140ms -> 220ms -> 340ms): giảm ~55% số lệnh Upstash Free mà vẫn phản hồi <200ms khi dự phòng!
+        const step = tick < 3 ? 140 : tick < 8 ? 220 : 340;
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
         await sleepMs(Math.min(step, remaining));
         tick += 1;
-        currentSeq = await readRoomSeq(key);
-        if (currentSeq === null) {
+        roomMeta = await readRoomSeqAndPhase(key);
+        if (!roomMeta) {
           return {
             status: 404,
             body: {
@@ -716,9 +808,31 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
             },
           };
         }
-        if (currentSeq > sinceSeq) break;
+        if (roomMeta.phase === 'DISSOLVED' || roomMeta.seq > sinceSeq) break;
       }
     }
+  }
+
+  const currentSeq = roomMeta.seq;
+
+  // Phòng đã giải tán -> trả ngay `phase: 'DISSOLVED'` (kèm gói DISSOLVE_ROOM nếu mới phát) thay vì treo chờ hoặc báo unchanged!
+  if (!includeSnapshot && roomMeta.phase === 'DISSOLVED') {
+    const fastDelta =
+      sinceSeq > 0 && currentSeq > sinceSeq && currentSeq - sinceSeq <= 20
+        ? await readDeltaEventsFast(key, sinceSeq, currentSeq)
+        : null;
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        unchanged: false,
+        roomCode: code,
+        phase: 'DISSOLVED',
+        seq: currentSeq,
+        events: fastDelta?.events ?? [],
+        storageMode: getUpstashRedis() ? 'upstash' : 'memory',
+      },
+    };
   }
 
   // Không có thay đổi mới sau khi chờ -> trả gọn nhẹ
@@ -728,6 +842,7 @@ export async function handleRoomGet(url: URL): Promise<RoomApiResult> {
       body: {
         ok: true,
         unchanged: true,
+        phase: roomMeta.phase,
         seq: currentSeq,
         events: [],
       },
@@ -857,7 +972,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
 
   const key = roomKey(game, code);
 
-  // Đường tắt siêu tốc cho sự kiện thuần (như DICE_CHARGE, RTC_SIGNAL, hoặc gói tin không đính kèm snapshot):
+  // Đường tắt siêu tốc cho sự kiện thuần (như ACTION_COMMIT, DICE_CHARGE, RTC_SIGNAL — chạy 1 Lua script nguyên tử):
   if (
     action === 'push' &&
     !payload.snapshot &&
@@ -865,13 +980,24 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     payload.packet &&
     typeof payload.packet === 'object'
   ) {
-    const fastSeq = await pushEventOnlyFast(
+    const fastRes = await pushEventOnlyFast(
       key,
       senderToken,
       now,
       payload.packet as Record<string, unknown>,
     );
-    if (fastSeq === null) {
+    if (!fastRes.ok) {
+      if (fastRes.reason === 'DISSOLVED') {
+        return {
+          status: 410,
+          body: {
+            ok: false,
+            error: 'ROOM_DISSOLVED',
+            phase: 'DISSOLVED',
+            message: `Phòng #${code} đã được giải tán.`,
+          },
+        };
+      }
       return {
         status: 404,
         body: { ok: false, error: 'ROOM_NOT_FOUND', message: `Không tìm thấy phòng #${code}.` },
@@ -879,7 +1005,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     }
     return {
       status: 200,
-      body: { ok: true, seq: fastSeq },
+      body: { ok: true, seq: fastRes.seq },
     };
   }
 
@@ -918,7 +1044,8 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     };
   }
 
-  const doc = await readRoomDocLight(key);
+  // Khi `rejoin`, đọc full doc 1 lần duy nhất (tránh gọi readRoomDocLight rồi lại readRoomDoc thừa!)
+  const doc = action === 'rejoin' ? await readRoomDoc(key) : await readRoomDocLight(key);
   if (!doc) {
     return {
       status: 404,
@@ -950,8 +1077,8 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
     const existingMember = membersList.find((h) => h.playerToken === senderToken);
 
     if (existingMember) {
-      const fullDoc = await readRoomDoc(key);
-      const recentEvents = fullDoc?.events ?? [];
+      const recentEvents =
+        action === 'rejoin' ? [...doc.events] : ((await readRoomDoc(key))?.events ?? []);
       existingMember.connected = true;
       existingMember.disconnectedAt = null;
       existingMember.botTakeover = false;
@@ -962,7 +1089,21 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
         payload.packet && typeof payload.packet === 'object'
           ? (payload.packet as Record<string, unknown>)
           : null;
-      await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
+      // Nếu rejoin không kèm packet -> chỉ lưu checkpoint (KHÔNG tăng `seq` rỗng ép các máy khác tải thừa HGETALL!)
+      const mutRes = pkt
+        ? await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt)
+        : await saveSnapshotCheckpointOnly(key, doc, senderToken, now);
+      if (!mutRes.ok && mutRes.reason === 'DISSOLVED') {
+        return {
+          status: 410,
+          body: {
+            ok: false,
+            error: 'ROOM_DISSOLVED',
+            phase: 'DISSOLVED',
+            message: `Phòng #${code} đã được giải tán.`,
+          },
+        };
+      }
       return {
         status: 200,
         body: {
@@ -1005,7 +1146,18 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       payload.packet && typeof payload.packet === 'object'
         ? (payload.packet as Record<string, unknown>)
         : null;
-    await commitRoomUpdateAtomic(key, doc, senderToken, now, packet);
+    const joinRes = await commitRoomUpdateAtomic(key, doc, senderToken, now, packet);
+    if (!joinRes.ok && joinRes.reason === 'DISSOLVED') {
+      return {
+        status: 410,
+        body: {
+          ok: false,
+          error: 'ROOM_DISSOLVED',
+          phase: 'DISSOLVED',
+          message: `Phòng #${code} đã được giải tán.`,
+        },
+      };
+    }
     return {
       status: 200,
       body: {
@@ -1039,7 +1191,18 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
         if (snapPhase === 'LOBBY' || snapPhase === 'PLAYING' || snapPhase === 'DISSOLVED') {
           doc.phase = snapPhase;
         }
-        await saveSnapshotCheckpointOnly(key, doc, senderToken, now);
+        const cpRes = await saveSnapshotCheckpointOnly(key, doc, senderToken, now);
+        if (!cpRes.ok && cpRes.reason === 'DISSOLVED') {
+          return {
+            status: 410,
+            body: {
+              ok: false,
+              error: 'ROOM_DISSOLVED',
+              phase: 'DISSOLVED',
+              message: `Phòng #${code} đã được giải tán.`,
+            },
+          };
+        }
       }
     }
 
@@ -1085,7 +1248,18 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       payload.packet && typeof payload.packet === 'object'
         ? (payload.packet as Record<string, unknown>)
         : null;
-    await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
+    const pushRes = await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
+    if (!pushRes.ok && pushRes.reason === 'DISSOLVED') {
+      return {
+        status: 410,
+        body: {
+          ok: false,
+          error: 'ROOM_DISSOLVED',
+          phase: 'DISSOLVED',
+          message: `Phòng #${code} đã được giải tán.`,
+        },
+      };
+    }
     return {
       status: 200,
       body: {
@@ -1115,7 +1289,7 @@ export async function handleRoomPost(payload: Record<string, unknown>): Promise<
       payload.packet && typeof payload.packet === 'object'
         ? (payload.packet as Record<string, unknown>)
         : null;
-    await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt);
+    await commitRoomUpdateAtomic(key, doc, senderToken, now, pkt, true);
     return {
       status: 200,
       body: { ok: true, seq: doc.seq, phase: doc.phase },

@@ -92,32 +92,42 @@ export function Dice3DWidget({
   const safeValue = value ?? 6;
   const initialEuler = getTargetEulerForFace(safeValue);
 
-  const [pose, setPose] = useState({
-    rx: initialEuler.rx,
-    ry: initialEuler.ry,
-    rz: 0,
-    x: 0,
-    y: 0,
-    scale: 1,
-    shadowScale: 1,
-    shadowOpacity: 0.42,
-  });
   const [isAnimating, setIsAnimating] = useState(false);
   const [sparks, setSparks] = useState<SparkParticle[]>([]);
   const [bonusGlow, setBonusGlow] = useState(false);
 
   const lastSeqRef = useRef(rollSeq);
   const currentRotRef = useRef({ rx: initialEuler.rx, ry: initialEuler.ry, rz: 0 });
+  const cubeRef = useRef<HTMLDivElement | null>(null);
+  const shadowRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const sparkUidRef = useRef(1);
 
-  // Đồng bộ mặt thẳng tắp vuông vức khi khôi phục ván hoặc đứng yên
+  const applyPoseToDom = (p: {
+    rx: number;
+    ry: number;
+    rz: number;
+    x: number;
+    y: number;
+    scale: number;
+    shadowScale: number;
+    shadowOpacity: number;
+  }) => {
+    if (cubeRef.current) {
+      cubeRef.current.style.transform = `translate3d(${p.x}px, ${p.y}px, 0) scale(${p.scale}) rotateZ(${p.rz}deg) rotateX(${p.rx}deg) rotateY(${p.ry}deg)`;
+    }
+    if (shadowRef.current) {
+      shadowRef.current.style.transform = `translate3d(${p.x * 0.6}px, 0, 0) scale(${p.shadowScale})`;
+      shadowRef.current.style.opacity = String(p.shadowOpacity);
+    }
+  };
+
+  // Đồng bộ mặt thẳng tắp vuông vức khi khôi phục ván hoặc đứng yên (cập nhật thẳng DOM ref -> 0 re-render!)
   useEffect(() => {
     if (rollSeq === lastSeqRef.current && !isAnimating) {
       const target = getTargetEulerForFace(safeValue);
       currentRotRef.current = { rx: target.rx, ry: target.ry, rz: 0 };
-      setPose((prev) => ({
-        ...prev,
+      applyPoseToDom({
         rx: target.rx,
         ry: target.ry,
         rz: 0,
@@ -126,7 +136,7 @@ export function Dice3DWidget({
         scale: 1,
         shadowScale: 1,
         shadowOpacity: 0.42,
-      }));
+      });
     }
   }, [safeValue, rollSeq, isAnimating]);
 
@@ -221,7 +231,7 @@ export function Dice3DWidget({
       const shadowScale = Math.max(0.45, 1 - heightRatio * 0.48);
       const shadowOpacity = Math.max(0.14, 0.46 - heightRatio * 0.28);
 
-      setPose({
+      applyPoseToDom({
         rx: curRx,
         ry: curRy,
         rz: curRz,
@@ -241,7 +251,7 @@ export function Dice3DWidget({
       const finalRx = targetBase.rx;
       const finalRy = targetBase.ry;
       currentRotRef.current = { rx: finalRx, ry: finalRy, rz: 0 };
-      setPose({
+      applyPoseToDom({
         rx: finalRx,
         ry: finalRy,
         rz: 0,
@@ -307,8 +317,9 @@ export function Dice3DWidget({
         />
       )}
 
-      {/* Bóng đổ thật xuống mặt bàn (thu nhỏ khi xúc xắc bay lên cao) */}
+      {/* Bóng đổ thật xuống mặt bàn (cập nhật trực tiếp qua shadowRef — 0 re-render 60fps!) */}
       <div
+        ref={shadowRef}
         aria-hidden="true"
         className="pointer-events-none absolute rounded-full"
         style={{
@@ -316,8 +327,9 @@ export function Dice3DWidget({
           height: size * 0.56,
           bottom: -6,
           background: 'radial-gradient(ellipse, rgba(28,14,4,0.8) 0%, rgba(28,14,4,0) 72%)',
-          transform: `translateX(${pose.x * 0.6}px) scale(${pose.shadowScale})`,
-          opacity: pose.shadowOpacity,
+          transform: 'translate3d(0px, 0, 0) scale(1)',
+          opacity: 0.42,
+          willChange: 'transform, opacity',
         }}
       />
 
@@ -354,11 +366,12 @@ export function Dice3DWidget({
         }}
       >
         <div
+          ref={cubeRef}
           style={{
             width: size,
             height: size,
             transformStyle: 'preserve-3d',
-            transform: `translate3d(${pose.x}px, ${pose.y}px, 0) scale(${pose.scale}) rotateZ(${pose.rz}deg) rotateX(${pose.rx}deg) rotateY(${pose.ry}deg)`,
+            transform: `translate3d(0px, 0px, 0) scale(1) rotateZ(0deg) rotateX(${initialEuler.rx}deg) rotateY(${initialEuler.ry}deg)`,
             willChange: 'transform',
           }}
         >

@@ -10,10 +10,11 @@ interface ConfettiPiece {
 
 /**
  * Bộ điều khiển WebGL 3D cho Xúc xắc & Pháo hoa Chiến thắng.
- * Tối ưu mạnh cho điện thoại:
+ * Tối ưu thuần kiến trúc (GIỮ NGUYÊN 100% ĐỒ HỌA SẮC NÉT trên cả PC lẫn Điện Thoại!):
  * - On-demand rendering: chỉ chạy vòng lặp requestAnimationFrame khi xúc xắc đang tung/nạp lực hoặc bắn pháo hoa;
  *   lúc xúc xắc đứng im dừng hẳn WebGL loop (0% GPU!).
- * - Chế độ Mượt (lowPowerMode — tự bật trên ĐT): pixelRatio = 1, tắt shadow map pass kép và giảm số hạt va chạm.
+ * - Giữ nguyên khử răng cưa (antialias), bóng đổ mềm, vật liệu clearcoat bóng mịn và đủ 64 mảnh pháo hoa trên ĐT;
+ *   chỉ tối ưu shadowMap 512×512 (nhẹ gấp 4× mà bóng đổ 2 xúc xắc vẫn mịn y hệt) & giới hạn pixelRatio <= 1.5 trên ĐT để vừa sắc nét vừa mát máy.
  */
 export class MonopolySceneController {
   private readonly container: HTMLElement;
@@ -27,12 +28,18 @@ export class MonopolySceneController {
   private rafId = 0;
   private loopRunning = false;
   private lowPowerMode = false;
+  private readonly isCompactViewport: boolean;
   private lastTime = performance.now();
   private resizeObserver: ResizeObserver;
 
   constructor(container: HTMLElement, initialState: GameState, lowPowerMode = false) {
     this.container = container;
     this.lowPowerMode = lowPowerMode;
+    this.isCompactViewport =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 920 ||
+        window.innerHeight < 540 ||
+        Boolean(window.matchMedia?.('(pointer: coarse)').matches));
 
     const width = Math.max(200, container.clientWidth);
     const height = Math.max(150, container.clientHeight);
@@ -42,16 +49,15 @@ export class MonopolySceneController {
     this.positionCamera(width, height);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !lowPowerMode,
+      antialias: true,
       alpha: true,
-      powerPreference: lowPowerMode ? 'default' : 'high-performance',
+      powerPreference: 'high-performance',
     });
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(
-      lowPowerMode ? 0.72 : Math.min(window.devicePixelRatio || 1, 2),
-    );
-    this.renderer.shadowMap.enabled = !lowPowerMode;
+    const maxDpr = this.lowPowerMode ? 1.25 : this.isCompactViewport ? 1.5 : 2;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
+    this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
@@ -67,10 +73,10 @@ export class MonopolySceneController {
     this.shadowFloor.rotation.x = -Math.PI / 2;
     this.shadowFloor.position.y = 0;
     this.shadowFloor.receiveShadow = true;
-    this.shadowFloor.visible = !lowPowerMode;
+    this.shadowFloor.visible = true;
     this.scene.add(this.shadowFloor);
 
-    this.diceActor = new DiceActor3D(initialState.diceCount, lowPowerMode);
+    this.diceActor = new DiceActor3D(initialState.diceCount, false);
     this.diceActor.setImmediateValues(initialState.lastDiceValues);
     this.scene.add(this.diceActor.group);
 
@@ -84,10 +90,10 @@ export class MonopolySceneController {
   public setLowPowerMode(enabled: boolean): void {
     if (this.disposed || this.lowPowerMode === enabled) return;
     this.lowPowerMode = enabled;
-    this.diceActor.setLowPowerMode(enabled);
-    this.renderer.setPixelRatio(enabled ? 0.72 : Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.shadowMap.enabled = !enabled;
-    this.shadowFloor.visible = !enabled;
+    const maxDpr = enabled ? 1.25 : this.isCompactViewport ? 1.5 : 2;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
+    this.renderer.shadowMap.enabled = true;
+    this.shadowFloor.visible = true;
     this.renderSingleFrame();
   }
 
@@ -107,7 +113,8 @@ export class MonopolySceneController {
     const sun = new THREE.DirectionalLight('#FFF7ED', 1.85);
     sun.position.set(4.5, 11, 5.5);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    const shadowRes = this.isCompactViewport ? 512 : 1024;
+    sun.shadow.mapSize.set(shadowRes, shadowRes);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 30;
     sun.shadow.camera.left = -9;
@@ -161,7 +168,7 @@ export class MonopolySceneController {
   public triggerVictoryFireworks(): void {
     const colors = ['#34D399', '#FBBF24', '#38BDF8', '#F472B6', '#A78BFA'];
     const geo = new THREE.BoxGeometry(0.14, 0.14, 0.04);
-    const count = this.lowPowerMode ? 28 : 64;
+    const count = 64;
     for (let i = 0; i < count; i += 1) {
       const mat = new THREE.MeshBasicMaterial({ color: colors[i % colors.length] });
       const m = new THREE.Mesh(geo, mat);

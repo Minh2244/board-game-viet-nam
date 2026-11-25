@@ -155,20 +155,32 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
     assertHorseBoardInvariants(s2);
   });
 
-  it('09. 4 Ô An Toàn (Ô Lên Bụt {12, 25, 38, 51}): không bị đá, không bị chiếm và vẫn chắn đường', () => {
+  it('09. 4 Ô ★ Cửa Lên Bụt ({12, 25, 38, 51}): đứng ngay cửa VẪN BỊ ĐÁ bình thường, vẫn chắn nhảy qua (chỉ lên bậc 1–6 mới bất tử)', () => {
     const st = make4PlayerState();
-    // Vàng đứng tại Ô An Toàn Lên Bụt của chính mình: progress = 51 -> trackIndex = 12
+    // Vàng đứng tại Ô ★ Cửa Lên Bụt của chính mình: progress = 51 -> trackIndex = 12
     setHorse(st, 'yellow_0', { zone: 'TRACK', progress: SAFE_DOOR_PROGRESS });
     expect(progressToTrackIndex('yellow', SAFE_DOOR_PROGRESS)).toBe(12);
 
     // Đỏ đứng cách đó 3 ô (progress = 9 -> trackIndex = 9)
     setHorse(st, 'red_0', { zone: 'TRACK', progress: 9 });
-    // Gieo 3 (đúng Ô An Toàn 12 đang có Vàng) -> CẤM ĐÁ & CẤM CHIẾM!
-    expect(computeLegalHorseMoves(st.horses, 'red', 3).some((m) => m.horseId === 'red_0')).toBe(false);
-    // Gieo 4, 5, 6 (muốn nhảy qua Vàng trên Ô An Toàn) -> CẤM NHẢY QUA!
+    // Gieo 3 (đúng Ô ★ 12 đang có Vàng) -> ĐÁ BAY Vàng về chuồng bình thường!
+    const kickMove = computeLegalHorseMoves(st.horses, 'red', 3).find((m) => m.horseId === 'red_0');
+    expect(kickMove?.kickedHorseId).toBe('yellow_0');
+    expect(kickMove?.toTrackIndex).toBe(12);
+    // Gieo 4, 5, 6 (muốn nhảy qua Vàng trên Ô ★) -> VẪN CẤM NHẢY QUA!
     expect(computeLegalHorseMoves(st.horses, 'red', 4).some((m) => m.horseId === 'red_0')).toBe(false);
+    expect(computeLegalHorseMoves(st.horses, 'red', 5).some((m) => m.horseId === 'red_0')).toBe(false);
+    expect(computeLegalHorseMoves(st.horses, 'red', 6).some((m) => m.horseId === 'red_0')).toBe(false);
     // Gieo 2 (dừng trước ở ô 11) -> hợp lệ!
     expect(computeLegalHorseMoves(st.horses, 'red', 2).some((m) => m.horseId === 'red_0')).toBe(true);
+
+    // Đỏ đứng ngay Ô ★ của Xanh Dương (trackIndex = 25 -> progress = 25) -> Xanh Dương vẫn ĐÁ được Đỏ!
+    const st2 = make4PlayerState();
+    setHorse(st2, 'red_0', { zone: 'TRACK', progress: 25 }); // trackIndex 25 = Cửa Xanh Dương
+    setHorse(st2, 'blue_0', { zone: 'TRACK', progress: 48 }); // (26+48)%52 = 22 (cách 3 ô tới cửa 25)
+    const blueKick = computeLegalHorseMoves(st2.horses, 'blue', 3).find((m) => m.horseId === 'blue_0');
+    expect(blueKick?.kickedHorseId).toBe('red_0');
+    expect(blueKick?.toProgress).toBe(SAFE_DOOR_PROGRESS);
   });
 
   it('10. Cấm đi lố quá Ô Lên Bụt (progress + dice > 51) — bắt buộc dừng đúng Ô Lên Bụt', () => {
@@ -200,19 +212,48 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
     expect(computeLegalHorseMoves(st.horses, 'red', 4).some((m) => m.horseId === 'red_0')).toBe(false);
   });
 
-  it('13. Đổi bụt trên cầu thang theo ĐÚNG SỐ XÚC XẮC (b > a, cấm nhảy qua ngựa mình)', () => {
+  it('13. Đổi bụt trên cầu thang cho phép CẢ LÊN LẪN XUỐNG từ mọi bậc 1..6 (cấm nhảy qua quân mình)', () => {
     const st = make4PlayerState();
-    setHorse(st, 'red_0', { zone: 'HOME_STAIRS', stairStep: 2 });
-    setHorse(st, 'red_1', { zone: 'HOME_STAIRS', stairStep: 5 });
+    setHorse(st, 'red_0', { zone: 'HOME_STAIRS', stairStep: 3 });
+    setHorse(st, 'red_1', { zone: 'HOME_STAIRS', stairStep: 6 });
 
-    // Đang ở bậc 2: gieo 1 hoặc 2 không đổi được; gieo 3 hoặc 4 lên thẳng bậc 3 hoặc 4; gieo 5/6 bị red_1 ở bậc 5 chặn!
-    expect(computeLegalHorseMoves(st.horses, 'red', 1).some((m) => m.horseId === 'red_0')).toBe(false);
-    expect(computeLegalHorseMoves(st.horses, 'red', 2).some((m) => m.horseId === 'red_0')).toBe(false);
+    // Đang ở bậc 3:
+    // - Gieo 1 hoặc 2 -> ĐƯỢC ĐỔI BỤT XUỐNG bậc 1 hoặc 2 (vì bậc 1, 2 đều trống!)
+    expect(
+      computeLegalHorseMoves(st.horses, 'red', 1).find((m) => m.horseId === 'red_0')?.toStairStep,
+    ).toBe(1);
+    expect(
+      computeLegalHorseMoves(st.horses, 'red', 2).find((m) => m.horseId === 'red_0')?.toStairStep,
+    ).toBe(2);
+    // - Gieo 3 -> trùng bậc hiện tại, không đi
+    expect(computeLegalHorseMoves(st.horses, 'red', 3).some((m) => m.horseId === 'red_0')).toBe(false);
+    // - Gieo 4 hoặc 5 -> lên bậc 4 hoặc 5
     expect(
       computeLegalHorseMoves(st.horses, 'red', 4).find((m) => m.horseId === 'red_0')?.toStairStep,
     ).toBe(4);
-    expect(computeLegalHorseMoves(st.horses, 'red', 5).some((m) => m.horseId === 'red_0')).toBe(false);
+    // - Gieo 6 -> bị red_1 ở bậc 6 chặn!
     expect(computeLegalHorseMoves(st.horses, 'red', 6).some((m) => m.horseId === 'red_0')).toBe(false);
+
+    // Đang ở bậc 6 (red_1) với red_0 chắn ở bậc 3:
+    // - Gieo 4 hoặc 5 -> ĐƯỢC lùi xuống bậc 4 hoặc 5!
+    expect(
+      computeLegalHorseMoves(st.horses, 'red', 4).find((m) => m.horseId === 'red_1')?.toStairStep,
+    ).toBe(4);
+    expect(
+      computeLegalHorseMoves(st.horses, 'red', 5).find((m) => m.horseId === 'red_1')?.toStairStep,
+    ).toBe(5);
+    // - Gieo 1 hoặc 2 -> BỊ CHẶN vì không được nhảy qua red_0 ở bậc 3!
+    expect(computeLegalHorseMoves(st.horses, 'red', 1).some((m) => m.horseId === 'red_1')).toBe(false);
+    expect(computeLegalHorseMoves(st.horses, 'red', 2).some((m) => m.horseId === 'red_1')).toBe(false);
+
+    // Thực thi nước đổi bụt xuống từ 3 -> 1 qua reducer kiểm tra trạng thái & bất biến
+    const { state: rolled } = reduceCoCaNguaAction(st, { type: 'ROLL_DICE', diceValue: 1 });
+    const { state: steppedDown } = reduceCoCaNguaAction(rolled, {
+      type: 'EXECUTE_MOVE',
+      horseId: 'red_0',
+    });
+    expect(steppedDown.horses.find((h) => h.id === 'red_0')?.stairStep).toBe(1);
+    assertHorseBoardInvariants(steppedDown);
   });
 
   it('14. Luật thắng 3–4–5–6: còn ngựa ở bậc 1 hoặc 2 CHƯA thắng; đẩy kín {3,4,5,6} THẮNG NGAY!', () => {
@@ -250,10 +291,14 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
       if (state.phase === 'WAIT_ROLL') {
         state = reduceCoCaNguaAction(state, { type: 'ROLL_DICE' }).state;
       } else if (state.phase === 'SELECT_HORSE') {
-        // Ưu tiên lên bụt / đổi bụt lên cao nhất / đá ngựa / tiến xa nhất
+        // Ưu tiên lên bụt / đổi bụt lên cao nhất / đá ngựa / tiến xa nhất (tránh lùi bụt vô ích trừ khi bắt buộc)
         const sorted = [...state.legalMoves].sort((a, b) => {
           const score = (m: typeof a) =>
-            (m.kind === 'CLIMB_STAIRS' || m.kind === 'ENTER_STAIRS' ? 500 + m.toStairStep * 20 : 0) +
+            (m.kind === 'ENTER_STAIRS' || (m.kind === 'CLIMB_STAIRS' && m.toStairStep > m.fromStairStep)
+              ? 500 + m.toStairStep * 20
+              : m.kind === 'CLIMB_STAIRS' && m.toStairStep < m.fromStairStep
+                ? -300
+                : 0) +
             (m.kickedHorseId ? 200 : 0) +
             (m.kind === 'DEPLOY' ? 120 : 0) +
             m.toProgress;
@@ -321,7 +366,7 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
     expect(hasColorWon(state.horses, state.winnerColor!)).toBe(true);
   });
 
-  it('18. Tăng tỉ lệ ra nút 1 và 6 (~60%) khi chưa có ngựa ra đường đua, và trở về ngẫu nhiên đều (~33%) khi đã có ngựa chạy', () => {
+  it('18. Xúc Xắc Thông Minh mở rộng: 0 ngựa (~60% ra 1/6), 1 ngựa + còn chuồng (~44% ra 1/6), >=2 ngựa (~33%), áp sát cửa ★ tăng tỉ lệ vào cửa', () => {
     const stuckState = make4PlayerState();
     expect(shouldBoostDeployDice(stuckState.horses, 'red')).toBe(true);
 
@@ -337,18 +382,42 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
     expect(rateStuck).toBeGreaterThan(0.54);
     expect(rateStuck).toBeLessThan(0.66);
 
-    // Sau khi có 1 ngựa ra đường đua -> tắt boost, quay về phân bố đều 1/6 (~33.3% cho {1, 6})
-    const activeState = make4PlayerState();
-    setHorse(activeState, 'red_0', { zone: 'TRACK', progress: 4 });
-    expect(shouldBoostDeployDice(activeState.horses, 'red')).toBe(false);
-
-    let deployHitsActive = 0;
+    // 1 ngựa đang chạy + vẫn còn 3 ngựa trong chuồng -> boost nhẹ {1, 6} lên ~44%
+    const oneOutState = make4PlayerState();
+    setHorse(oneOutState, 'red_0', { zone: 'TRACK', progress: 4 });
+    expect(shouldBoostDeployDice(oneOutState.horses, 'red')).toBe(false);
+    let deployHitsOne = 0;
     for (let i = 0; i < samples; i += 1) {
-      const d = rollSmartHorseDice(activeState);
-      if (d === 1 || d === 6) deployHitsActive += 1;
+      const d = rollSmartHorseDice(oneOutState);
+      if (d === 1 || d === 6) deployHitsOne += 1;
     }
-    const rateActive = deployHitsActive / samples;
-    expect(rateActive).toBeGreaterThan(0.28);
-    expect(rateActive).toBeLessThan(0.39);
+    const rateOne = deployHitsOne / samples;
+    expect(rateOne).toBeGreaterThan(0.38);
+    expect(rateOne).toBeLessThan(0.5);
+
+    // Đã có >= 2 ngựa ngoài đường đua (chưa gần cửa) -> phân bố đều 1/6 (~33.3% cho {1, 6})
+    const twoOutState = make4PlayerState();
+    setHorse(twoOutState, 'red_0', { zone: 'TRACK', progress: 4 });
+    setHorse(twoOutState, 'red_1', { zone: 'TRACK', progress: 12 });
+    let deployHitsTwo = 0;
+    for (let i = 0; i < samples; i += 1) {
+      const d = rollSmartHorseDice(twoOutState);
+      if (d === 1 || d === 6) deployHitsTwo += 1;
+    }
+    const rateTwo = deployHitsTwo / samples;
+    expect(rateTwo).toBeGreaterThan(0.28);
+    expect(rateTwo).toBeLessThan(0.39);
+
+    // Ngựa áp sát Cửa ★ (progress = 47, cần đúng mặt 4 để dừng cửa 51) -> mặt 4 được tăng trọng số ~25%
+    const nearDoorState = make4PlayerState();
+    setHorse(nearDoorState, 'red_0', { zone: 'TRACK', progress: 47 });
+    setHorse(nearDoorState, 'red_1', { zone: 'TRACK', progress: 12 });
+    let face4Hits = 0;
+    for (let i = 0; i < samples; i += 1) {
+      if (rollSmartHorseDice(nearDoorState) === 4) face4Hits += 1;
+    }
+    const rateFace4 = face4Hits / samples;
+    expect(rateFace4).toBeGreaterThan(0.2);
+    expect(rateFace4).toBeLessThan(0.31);
   });
 });

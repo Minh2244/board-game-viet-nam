@@ -586,8 +586,11 @@ export function ChessBoardView({
         >
           {/* Đường chỉ viền vàng kim mảnh chuẩn ảnh bìa */}
           <div className="relative flex flex-1 overflow-hidden rounded-[10px] border-[2px] border-[#D4AF37]/85 p-[2px] shadow-inner">
-            {/* Lưới 8×8 ô Trắng ngà – Đen than */}
-            <div className="relative grid flex-1 grid-cols-8 grid-rows-8 overflow-hidden rounded-[7px]">
+            {/* Lưới 8×8 ô Trắng ngà – Đen than (cách ly paint/layout để lướt quân mượt 60fps trên ĐT) */}
+            <div
+              className="relative grid flex-1 grid-cols-8 grid-rows-8 overflow-hidden rounded-[7px]"
+              style={{ contain: 'layout style paint' }}
+            >
               {displayRows.map((boardRow, vRow) =>
                 displayCols.map((boardCol, vCol) => {
                   const sq = rcToSq(boardRow, boardCol);

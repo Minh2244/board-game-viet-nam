@@ -81,11 +81,10 @@ export function CoCaNguaRulesModal({ onClose }: { onClose: () => void }) {
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-cyan-400 text-[11px] font-black text-slate-950">
                 4
               </span>
-              <h3 className="text-xs font-black text-cyan-300">4 Ô An Toàn ★ (Ô Lên Bụt)</h3>
+              <h3 className="text-xs font-black text-cyan-300">Ô Cửa Lên Bụt ★ &amp; Khu An Toàn</h3>
             </div>
             <p className="text-[11.5px] leading-snug text-amber-50/90">
-              4 ô có ngôi sao <strong className="text-amber-300">★</strong> trước cầu thang là vùng an toàn:{' '}
-              <strong>không thể bị đá</strong> nhưng vẫn chắn đường không cho quân khác nhảy qua.
+              Đứng ngay Ô <strong className="text-amber-300">★</strong> (kể cả cửa nhà mình hay địch) <strong>vẫn có thể bị đá</strong>! Chỉ khi quân đã <strong>leo lên bậc bụt 1–6</strong> mới bất khả xâm phạm.
             </p>
           </div>
 
@@ -94,11 +93,11 @@ export function CoCaNguaRulesModal({ onClose }: { onClose: () => void }) {
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-300 text-[11px] font-black text-stone-950">
                 5
               </span>
-              <h3 className="text-xs font-black text-amber-200">Dừng Đúng Cửa &amp; Leo / Đổi Bụt</h3>
+              <h3 className="text-xs font-black text-amber-200">Dừng Đúng Cửa &amp; Đổi Bụt Lên / Xuống</h3>
             </div>
             <p className="text-[11.5px] leading-snug text-amber-50/90">
-              Phải dừng <strong>đúng Ô ★</strong> (cấm đi lố). Từ Ô ★ đổ số mấy leo thẳng bậc đó; đang đứng bậc thấp
-              đổ số <strong>lớn hơn</strong> (đường trống) được đổi bụt lên đúng số đó!
+              Phải dừng <strong>đúng Ô ★</strong> (cấm đi lố). Từ Ô ★ đổ số mấy leo thẳng bậc đó; đang đứng trên bậc bụt
+              1–6 có thể đổi bụt <strong>lên hoặc xuống</strong> đúng số xúc xắc (không nhảy qua quân mình)!
             </p>
           </div>
 

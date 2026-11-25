@@ -69,11 +69,8 @@ interface HorseBoardViewProps {
 interface FlyingHorseFx {
   horseId: string;
   color: HorseColor;
-  leftPct: number;
-  topPct: number;
-  liftPx: number;
-  scale: number;
-  rotateDeg: number;
+  initialLeftPct: number;
+  initialTopPct: number;
   kind: 'deploy' | 'kick-return';
 }
 
@@ -200,6 +197,10 @@ export function HorseBoardView({
   const processingRemoteRef = useRef(false);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const burstSeqRef = useRef(1);
+  const boardSectionRef = useRef<HTMLElement | null>(null);
+  const flyingWrapRef = useRef<HTMLDivElement | null>(null);
+  const flyingBodyRef = useRef<HTMLDivElement | null>(null);
+  const flyingShadowRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -268,7 +269,7 @@ export function HorseBoardView({
     [],
   );
 
-  /** Diễn hoạt ngựa bay theo cung parabol 60fps (dùng cho Xuất chuồng & Bị đá bay về chuồng!) */
+  /** Diễn hoạt ngựa bay theo cung parabol 60fps thuần GPU DOM ref (0 React re-render toàn bàn cờ!) */
   const animateParabolicFlight = useCallback(
     (opts: {
       horseId: string;
@@ -284,6 +285,14 @@ export function HorseBoardView({
       const fromPct = gridCenterPct(opts.from.col, opts.from.row);
       const toPct = gridCenterPct(opts.to.col, opts.to.row);
 
+      setFlyingFx({
+        horseId: opts.horseId,
+        color: opts.color,
+        initialLeftPct: fromPct.leftPct,
+        initialTopPct: fromPct.topPct,
+        kind: opts.kind,
+      });
+
       return new Promise((resolve) => {
         const startTime = performance.now();
         const step = (now: number) => {
@@ -292,7 +301,6 @@ export function HorseBoardView({
             return;
           }
           const t = Math.min(1, Math.max(0, (now - startTime) / opts.durationMs));
-          // Đường cong tiến mượt ease-out nhẹ
           const ease = 1 - Math.pow(1 - t, 1.65);
           const leftPct = fromPct.leftPct + (toPct.leftPct - fromPct.leftPct) * ease;
           const topPct = fromPct.topPct + (toPct.topPct - fromPct.topPct) * ease;
@@ -302,16 +310,21 @@ export function HorseBoardView({
           const rotateDeg =
             opts.kind === 'kick-return' ? t * opts.spinDeg : arc * opts.spinDeg;
 
-          setFlyingFx({
-            horseId: opts.horseId,
-            color: opts.color,
-            leftPct,
-            topPct,
-            liftPx,
-            scale,
-            rotateDeg,
-            kind: opts.kind,
-          });
+          const wrap = flyingWrapRef.current;
+          const boardEl = boardSectionRef.current;
+          if (wrap && boardEl) {
+            const bw = boardEl.clientWidth || 600;
+            const bh = boardEl.clientHeight || 600;
+            const pxX = (leftPct / 100) * bw;
+            const pxY = (topPct / 100) * bh;
+            wrap.style.transform = `translate3d(${pxX}px, ${pxY}px, 0) translate(-50%, -56%)`;
+          }
+          if (flyingBodyRef.current) {
+            flyingBodyRef.current.style.transform = `translate3d(0, ${liftPx}px, 0) scale(${scale}) rotate(${rotateDeg}deg)`;
+          }
+          if (flyingShadowRef.current) {
+            flyingShadowRef.current.style.transform = `scale(${Math.max(0.45, 1.15 - scale * 0.35)})`;
+          }
 
           if (t < 1) {
             requestAnimationFrame(step);
@@ -480,15 +493,21 @@ export function HorseBoardView({
               setIsBoardShaking(false);
             } else if (step.reachedSafeDoor) {
               horseAudio.playSafeDoor();
-              spawnBurst(destCoord.col, destCoord.row, 'safe', '★ AN TOÀN!');
-              showBanner('★ VÀO Ô AN TOÀN — SẴN SÀNG LEO BỤT!', 'good', 1650);
+              spawnBurst(destCoord.col, destCoord.row, 'safe', '★ CỬA BỤT!');
+              showBanner('★ TỚI CỬA LÊN BỤT — LƯỢT SAU ĐƯỢC LEO BỤT!', 'good', 1650);
               await sleep(Math.round(190 * factor));
             }
           }
         } else if (step.type === 'HORSE_CLIMB') {
           setHoppingHorseId(step.horseId);
-          const firstStep = step.fromSafeDoor ? 1 : step.fromStairStep + 1;
-          for (let s = firstStep; s <= step.toStairStep; s += 1) {
+          const climbingDown = !step.fromSafeDoor && step.toStairStep < step.fromStairStep;
+          const dir = climbingDown ? -1 : 1;
+          const firstStep = step.fromSafeDoor ? 1 : step.fromStairStep + dir;
+          for (
+            let s = firstStep;
+            dir > 0 ? s <= step.toStairStep : s >= step.toStairStep;
+            s += dir
+          ) {
             if (!mountedRef.current) return;
             working = working.map((h) =>
               h.id === step.horseId
@@ -496,8 +515,8 @@ export function HorseBoardView({
                 : h,
             );
             setPlaybackHorses([...working]);
-            if (s < step.toStairStep) {
-              horseAudio.playHorseHop(s - 1);
+            if (s !== step.toStairStep) {
+              horseAudio.playHorseHop(Math.abs(s - firstStep));
               await sleep(Math.round(125 * factor));
             }
           }
@@ -507,14 +526,20 @@ export function HorseBoardView({
             landedCoord.col,
             landedCoord.row,
             'stairs',
-            step.toStairStep >= 3 ? `🏆 BỤT ${step.toStairStep}!` : `⬆️ BỤT ${step.toStairStep}`,
+            climbingDown
+              ? `⬇️ BỤT ${step.toStairStep}`
+              : step.toStairStep >= 3
+                ? `🏆 BỤT ${step.toStairStep}!`
+                : `⬆️ BỤT ${step.toStairStep}`,
             900,
           );
           showBanner(
             step.fromSafeDoor
               ? `🏆 LEO THẲNG LÊN BỤT SỐ ${step.toStairStep}!`
-              : `⬆️ ĐỔI BỤT LÊN BẬC SỐ ${step.toStairStep}!`,
-            step.toStairStep >= 3 ? 'gold' : 'good',
+              : climbingDown
+                ? `⬇️ ĐỔI BỤT XUỐNG BẬC SỐ ${step.toStairStep}!`
+                : `⬆️ ĐỔI BỤT LÊN BẬC SỐ ${step.toStairStep}!`,
+            !climbingDown && step.toStairStep >= 3 ? 'gold' : 'good',
             1550,
           );
           setHoppingHorseId(null);
@@ -1043,9 +1068,11 @@ export function HorseBoardView({
 
         {/* BÀN CỜ GIẤY TRUYỀN THỐNG VIỆT NAM 15×15 TO HẾT CỠ (PHỦ GẦN 98% CHIỀU CAO!) */}
         <section
+          ref={boardSectionRef}
           className={`relative aspect-square h-full max-h-[706px] shrink-0 rounded-[22px] p-0 shadow-[0_16px_38px_rgba(24,10,3,0.64)] transition-transform ${
             isBoardShaking ? 'animate-board-shake' : ''
           }`}
+          style={{ contain: 'layout style paint' }}
         >
           {/* SVG NỀN BÀN CỜ + MŨI TÊN CHỈ ĐƯỜNG */}
           <svg
@@ -1530,27 +1557,32 @@ export function HorseBoardView({
             );
           })}
 
-          {/* LỚP NGỰA ĐANG BAY PARABOL (XUẤT CHUỒNG HOẶC BỊ ĐÁ XOAY TÍT BAY VỀ CHUỒNG!) */}
+          {/* LỚP NGỰA ĐANG BAY PARABOL THUẦN GPU DOM REF (0 React re-render suốt chuyến bay!) */}
           {flyingFx && (
             <div
-              className="pointer-events-none absolute z-40 flex items-center justify-center"
+              ref={flyingWrapRef}
+              className="pointer-events-none absolute left-0 top-0 z-40 flex items-center justify-center will-change-transform"
               style={{
-                left: `${flyingFx.leftPct}%`,
-                top: `${flyingFx.topPct}%`,
                 width: '9.6%',
                 height: '9.6%',
-                transform: 'translate(-50%, -56%)',
+                transform: `translate3d(${((boardSectionRef.current?.clientWidth || 600) * flyingFx.initialLeftPct) / 100}px, ${((boardSectionRef.current?.clientHeight || 600) * flyingFx.initialTopPct) / 100}px, 0) translate(-50%, -56%)`,
               }}
             >
-              {/* Bóng đổ mặt đất nằm dưới quỹ đạo bay */}
+              {/* Bóng đổ mặt đất nằm dưới quỹ đạo bay (dùng radial-gradient thay blur) */}
               <span
-                className="absolute bottom-1 h-3 w-7 rounded-full bg-black/35 blur-[2px]"
-                style={{ transform: `scale(${Math.max(0.45, 1.15 - flyingFx.scale * 0.35)})` }}
+                ref={flyingShadowRef}
+                className="absolute bottom-1 h-4 w-9 rounded-full"
+                style={{
+                  background: 'radial-gradient(ellipse, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 75%)',
+                  transform: 'scale(0.8)',
+                  willChange: 'transform',
+                }}
               />
               <div
+                ref={flyingBodyRef}
                 className="h-full w-full"
                 style={{
-                  transform: `translateY(${flyingFx.liftPx}px) scale(${flyingFx.scale}) rotate(${flyingFx.rotateDeg}deg)`,
+                  transform: 'translate3d(0, 0px, 0) scale(1) rotate(0deg)',
                   willChange: 'transform',
                 }}
               >

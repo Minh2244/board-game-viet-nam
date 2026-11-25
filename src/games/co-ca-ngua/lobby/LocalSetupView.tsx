@@ -344,8 +344,8 @@ export function LocalSetupView({ initialMode, onBack, onStartMatch }: LocalSetup
                   Tóm tắt luật Việt Nam
                 </div>
                 <div>• Gieo <strong>1 / 6</strong>: Xuất chuồng + thêm lượt (tăng tỉ lệ khi chưa có ngựa ra).</div>
-                <div>• Cấm nhảy qua mọi quân · 4 Ô <strong>★ An Toàn</strong> không bị đá.</div>
-                <div>• Kín 4 bậc <strong>3 – 4 – 5 – 6</strong> thắng ngay!</div>
+                <div>• Cấm nhảy qua mọi quân · Đứng <strong>Ô ★</strong> vẫn bị đá (chỉ lên bậc 1–6 mới an toàn).</div>
+                <div>• Đổi bụt <strong>lên hoặc xuống</strong> đúng số · Kín 4 bậc <strong>3 – 4 – 5 – 6</strong> thắng ngay!</div>
               </div>
             </div>
 

@@ -417,24 +417,26 @@ export function HandActorOverlay({
         </div>
       )}
 
-      {/* Bàn Tay 2.5D Nét Cong Tự Nhiên + Bóng Đổ Độ Cao 3D */}
+      {/* Bàn Tay 2.5D Nét Cong Tự Nhiên + Bóng Đổ Độ Cao 3D (thuần GPU translate3d — 0 Layout Thrashing!) */}
       {hand && metrics && (
         <div
           style={{
-            left: hand.x,
-            top: hand.y,
-            transition: `left ${hand.transitionMs}ms cubic-bezier(0.25, 1, 0.5, 1), top ${hand.transitionMs}ms cubic-bezier(0.25, 1, 0.5, 1)`,
+            left: 0,
+            top: 0,
+            transform: `translate3d(${hand.x}px, ${hand.y}px, 0)`,
+            transition: `transform ${hand.transitionMs}ms cubic-bezier(0.25, 1, 0.5, 1)`,
           }}
           className="absolute will-change-transform"
         >
-          {/* Bóng đổ nằm sát mặt bàn gỗ (tách khỏi bàn tay khi tay vung lên cao -> tạo chiều sâu 3D cực rõ!) */}
+          {/* Bóng đổ nằm sát mặt bàn gỗ dùng radial-gradient mềm (y hệt blur-md nhưng 0 tốn GPU blur!) */}
           <div
             style={{
-              transform: `translate(-50%, -25%) scale(${metrics.shadowScale})`,
+              background: 'radial-gradient(ellipse, rgba(12, 10, 9, 0.78) 0%, rgba(12, 10, 9, 0.35) 52%, rgba(12, 10, 9, 0) 76%)',
+              transform: `translate3d(-50%, -25%, 0) scale(${metrics.shadowScale})`,
               opacity: metrics.shadowOpacity,
               transition: 'transform 160ms ease-out, opacity 160ms ease-out',
             }}
-            className="absolute h-12 w-20 rounded-full bg-stone-950 blur-md"
+            className="absolute h-16 w-28 rounded-full"
           />
 
           {/* Thân bàn tay nâng theo độ cao liftY & góc xoay tự nhiên */}

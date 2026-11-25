@@ -1,3 +1,4 @@
+import { memo, useEffect, useRef } from 'react';
 import { formatShortVnd } from '../engine/rules';
 
 export interface CashParticleSeed {
@@ -22,12 +23,18 @@ export interface ActiveCashTransfer {
   fromName: string;
   toName: string;
   reasonText: string;
-  progress: number; // 0..1
+  durationMs: number;
   items: CashParticleSeed[];
+  onArrive?: () => void;
+  onComplete?: () => void;
 }
 
 /** Cọc tiền giấy dày cột đai + Chồng đồng xu vàng nổi bật (trượt từ từ giữa Nhân Vật ↔ Ngân Hàng) */
-function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
+const CashStackBundleSvg = memo(function CashStackBundleSvg({
+  tone,
+}: {
+  tone: ActiveCashTransfer['tone'];
+}) {
   const billTop =
     tone === 'from-bank' ? '#6EE7B7' : tone === 'player-to-player' ? '#7DD3FC' : '#A7F3D0';
   const billMid =
@@ -60,7 +67,6 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
       {/* Xấp tiền giấy nhiều lớp xếp chồng kiểu isometric */}
       {[34, 28, 22, 16, 10, 4].map((dy, idx) => (
         <g key={dy} transform={`translate(0, ${dy})`}>
-          {/* Cạnh dày bên dưới/trước xấp tiền */}
           <polygon
             points="12,34 58,52 94,28 94,35 58,59 12,41"
             fill={idx % 2 === 0 ? '#D1FAE5' : '#A7F3D0'}
@@ -79,7 +85,6 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
         strokeWidth="1.6"
         strokeLinejoin="round"
       />
-      {/* Khung viền hoa văn trên tờ tiền */}
       <polygon
         points="20,33 48,15 86,29 58,47"
         fill="none"
@@ -88,7 +93,6 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
         strokeDasharray="3 2"
         opacity="0.8"
       />
-      {/* Huy hiệu mệnh giá giữa tờ tiền */}
       <ellipse cx="53" cy="31" rx="11" ry="7" fill="rgba(6, 78, 59, 0.35)" stroke="#FEF08A" strokeWidth="1.2" />
       <text
         x="53"
@@ -118,7 +122,7 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
         strokeLinejoin="round"
       />
 
-      {/* Chồng đồng xu vàng cao óng ánh đặt cạnh xấp tiền (y hệt phong cách cổ điển) */}
+      {/* Chồng đồng xu vàng cao óng ánh đặt cạnh xấp tiền */}
       {[78, 72, 66, 60, 54, 48, 42].map((cy, idx) => (
         <g key={cy}>
           <ellipse
@@ -141,7 +145,6 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
           />
         </g>
       ))}
-      {/* Ký hiệu ₫ trên mặt đồng xu trên cùng */}
       <ellipse cx="97" cy="42" rx="12" ry="5" fill="none" stroke="#92400E" strokeWidth="1" opacity="0.65" />
       <text
         x="97"
@@ -156,10 +159,10 @@ function CashStackBundleSvg({ tone }: { tone: ActiveCashTransfer['tone'] }) {
       </text>
     </svg>
   );
-}
+});
 
 /** Đồng xu vàng nhỏ bay nối đuôi nhẹ tạo cảm giác chuyển động mượt */
-function TrailingGoldCoinSvg() {
+const TrailingGoldCoinSvg = memo(function TrailingGoldCoinSvg() {
   return (
     <svg viewBox="0 0 26 26" className="h-5 w-5 drop-shadow-[0_4px_8px_rgba(0,0,0,0.55)]" aria-hidden="true">
       <defs>
@@ -175,166 +178,241 @@ function TrailingGoldCoinSvg() {
       </text>
     </svg>
   );
-}
+});
 
 function evalQuadBezier(p0: number, p1: number, p2: number, t: number): number {
   const u = 1 - t;
   return u * u * p0 + 2 * u * t * p1 + t * t * p2;
 }
 
-export function CashTransferOverlay({ transfers }: { transfers: readonly ActiveCashTransfer[] }) {
+/**
+ * Mỗi chuyến chuyển tiền tự chạy vòng lặp requestAnimationFrame độc lập và cập nhật thẳng DOM ref
+ * bằng `transform: translate3d(...)` thuần GPU — đạt 0 React re-render trên toàn bàn cờ suốt 1.52s bay!
+ */
+const CashTransferFlightItem = memo(function CashTransferFlightItem({
+  tr,
+}: {
+  tr: ActiveCashTransfer;
+}) {
+  const arcGroupRef = useRef<SVGGElement | null>(null);
+  const pulseOuterRef = useRef<SVGCircleElement | null>(null);
+  const pulseInnerRef = useRef<SVGCircleElement | null>(null);
+  const bundleRef = useRef<HTMLDivElement | null>(null);
+  const coinRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const callbacksRef = useRef({ onArrive: tr.onArrive, onComplete: tr.onComplete });
+  callbacksRef.current = { onArrive: tr.onArrive, onComplete: tr.onComplete };
+
+  const arcColor =
+    tr.tone === 'from-bank' ? '#34D399' : tr.tone === 'player-to-player' ? '#38BDF8' : '#FDE047';
+  const badgeBorder =
+    tr.tone === 'from-bank'
+      ? 'border-emerald-300/95 bg-emerald-950/95 text-emerald-100'
+      : tr.tone === 'player-to-player'
+        ? 'border-sky-300/95 bg-slate-950/95 text-sky-100'
+        : 'border-amber-300/95 bg-slate-950/95 text-amber-100';
+  const amountColor =
+    tr.tone === 'from-bank'
+      ? 'text-emerald-300'
+      : tr.tone === 'player-to-player'
+        ? 'text-sky-300'
+        : 'text-amber-300';
+  const d = `M ${tr.startX} ${tr.startY} Q ${tr.ctrlX} ${tr.ctrlY} ${tr.endX} ${tr.endY}`;
+  const trailCoins = tr.items.slice(0, 3);
+
+  useEffect(() => {
+    let rafId = 0;
+    let cancelled = false;
+    let arrived = false;
+    const tStart = performance.now();
+    const durationMs = Math.max(300, tr.durationMs);
+
+    const tick = (now: number) => {
+      if (cancelled) return;
+      const p = Math.min(1, Math.max(0, (now - tStart) / durationMs));
+      const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+
+      if (!arrived && p >= 0.78) {
+        arrived = true;
+        callbacksRef.current.onArrive?.();
+      }
+
+      // 1. Đường cung ánh sáng & vòng sóng chạm đích
+      const arcOpacity =
+        p < 0.14 ? p / 0.14 : p > 0.86 ? Math.max(0, (1 - p) / 0.14) : 0.85;
+      if (arcGroupRef.current) {
+        arcGroupRef.current.style.opacity = String(arcOpacity);
+      }
+
+      const arrivePulse = p > 0.7 ? Math.sin(((p - 0.7) / 0.3) * Math.PI) : 0;
+      if (pulseOuterRef.current) {
+        pulseOuterRef.current.setAttribute('r', String(16 + (1 - arrivePulse) * 34));
+        pulseOuterRef.current.setAttribute('opacity', String(arrivePulse > 0 ? arrivePulse * 0.95 : 0));
+      }
+      if (pulseInnerRef.current) {
+        pulseInnerRef.current.setAttribute('r', String(12 + arrivePulse * 18));
+        pulseInnerRef.current.setAttribute('opacity', String(arrivePulse > 0 ? arrivePulse * 0.28 : 0));
+      }
+
+      // 2. Cọc tiền & chồng xu vàng chính bay thuần GPU translate3d
+      const bundleX = evalQuadBezier(tr.startX, tr.ctrlX, tr.endX, ease);
+      const bundleY = evalQuadBezier(tr.startY, tr.ctrlY, tr.endY, ease) - Math.sin(ease * Math.PI) * 14;
+      const bundleOpacity = p < 0.12 ? p / 0.12 : p > 0.88 ? Math.max(0, (1 - p) / 0.12) : 1;
+      const bundleScale =
+        p < 0.16
+          ? 0.72 + (p / 0.16) * 0.32
+          : p > 0.84
+            ? 1.04 - ((p - 0.84) / 0.16) * 0.34
+            : 1.04 + Math.sin(ease * Math.PI) * 0.08;
+      const tiltDeg = (tr.endX >= tr.startX ? 1 : -1) * Math.sin(ease * Math.PI) * 5;
+
+      if (bundleRef.current) {
+        bundleRef.current.style.opacity = String(bundleOpacity);
+        bundleRef.current.style.transform = `translate3d(${bundleX}px, ${bundleY}px, 0) translate(-50%, -50%) rotate(${tiltDeg}deg) scale(${bundleScale})`;
+      }
+
+      // 3. 3 đồng xu vàng bay nối đuôi thuần GPU translate3d
+      for (let idx = 0; idx < trailCoins.length; idx += 1) {
+        const el = coinRefs.current[idx];
+        if (!el) continue;
+        const item = trailCoins[idx];
+        const trailP = Math.max(0, p - (idx + 1) * 0.085);
+        if (trailP <= 0.02 || trailP >= 0.96) {
+          el.style.opacity = '0';
+          continue;
+        }
+        const te = trailP < 0.5 ? 2 * trailP * trailP : 1 - Math.pow(-2 * trailP + 2, 2) / 2;
+        const env = Math.sin(te * Math.PI);
+        const cx = evalQuadBezier(tr.startX, tr.ctrlX, tr.endX, te) + item.spreadX * 0.8 * env;
+        const cy = evalQuadBezier(tr.startY, tr.ctrlY, tr.endY, te) + item.spreadY * 0.8 * env;
+        const cOp = (trailP < 0.14 ? trailP / 0.14 : trailP > 0.85 ? (1 - trailP) / 0.15 : 1) * 0.88;
+        el.style.opacity = String(cOp);
+        el.style.transform = `translate3d(${cx}px, ${cy}px, 0) translate(-50%, -50%) rotate(${item.rotStart + te * 140}deg) scale(${0.8 + env * 0.25})`;
+      }
+
+      if (p < 1) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        if (!arrived) {
+          arrived = true;
+          callbacksRef.current.onArrive?.();
+        }
+        callbacksRef.current.onComplete?.();
+      }
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [tr, trailCoins]);
+
+  return (
+    <>
+      <svg className="absolute inset-0 h-full w-full overflow-visible">
+        <g ref={arcGroupRef} style={{ opacity: 0 }}>
+          <path
+            d={d}
+            fill="none"
+            stroke={arcColor}
+            strokeWidth="5.5"
+            strokeLinecap="round"
+            opacity="0.22"
+          />
+          <path
+            d={d}
+            fill="none"
+            stroke={arcColor}
+            strokeWidth="2.8"
+            strokeDasharray="10 8"
+            strokeLinecap="round"
+            className="animate-cash-arc"
+          />
+          <circle
+            ref={pulseOuterRef}
+            cx={tr.endX}
+            cy={tr.endY}
+            r="16"
+            fill="none"
+            stroke="#FEF08A"
+            strokeWidth="3.2"
+            opacity="0"
+          />
+          <circle
+            ref={pulseInnerRef}
+            cx={tr.endX}
+            cy={tr.endY}
+            r="12"
+            fill={arcColor}
+            opacity="0"
+          />
+        </g>
+      </svg>
+
+      {trailCoins.map((_, idx) => (
+        <div
+          key={idx}
+          ref={(el) => {
+            coinRefs.current[idx] = el;
+          }}
+          style={{
+            left: 0,
+            top: 0,
+            opacity: 0,
+            transform: `translate3d(${tr.startX}px, ${tr.startY}px, 0) translate(-50%, -50%)`,
+            willChange: 'transform, opacity',
+          }}
+          className="absolute"
+        >
+          <TrailingGoldCoinSvg />
+        </div>
+      ))}
+
+      <div
+        ref={bundleRef}
+        style={{
+          left: 0,
+          top: 0,
+          opacity: 0,
+          transform: `translate3d(${tr.startX}px, ${tr.startY}px, 0) translate(-50%, -50%)`,
+          willChange: 'transform, opacity',
+        }}
+        className="absolute flex flex-col items-center"
+      >
+        <div
+          className={`mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-0.5 text-xs font-black shadow-[0_8px_22px_rgba(0,0,0,0.75)] ${badgeBorder}`}
+        >
+          <span>{tr.fromName}</span>
+          <span className="text-amber-300">➔</span>
+          <span>{tr.toName}</span>
+          <span className={`ml-0.5 font-black ${amountColor}`}>
+            {tr.tone === 'from-bank' ? '+' : tr.tone === 'to-bank' ? '-' : ''}
+            {formatShortVnd(tr.amount)}
+          </span>
+          {tr.reasonText && (
+            <span className="inline rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold opacity-90">
+              {tr.reasonText}
+            </span>
+          )}
+        </div>
+        <CashStackBundleSvg tone={tr.tone} />
+      </div>
+    </>
+  );
+});
+
+export const CashTransferOverlay = memo(function CashTransferOverlay({
+  transfers,
+}: {
+  transfers: readonly ActiveCashTransfer[];
+}) {
   if (transfers.length === 0) return null;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[60] overflow-hidden" data-testid="cash-transfer-overlay">
-      {/* Đường dẫn sáng êm dịu nối Nhân Vật Trái ↔ Ngân Hàng / Chủ Đất Phải */}
-      <svg className="absolute inset-0 h-full w-full overflow-visible">
-        {transfers.map((tr) => {
-          const arcOpacity =
-            tr.progress < 0.14
-              ? tr.progress / 0.14
-              : tr.progress > 0.86
-                ? Math.max(0, (1 - tr.progress) / 0.14)
-                : 0.85;
-          const arcColor =
-            tr.tone === 'from-bank' ? '#34D399' : tr.tone === 'player-to-player' ? '#38BDF8' : '#FDE047';
-
-          const d = `M ${tr.startX} ${tr.startY} Q ${tr.ctrlX} ${tr.ctrlY} ${tr.endX} ${tr.endY}`;
-          const arrivePulse = tr.progress > 0.7 ? Math.sin(((tr.progress - 0.7) / 0.3) * Math.PI) : 0;
-
-          return (
-            <g key={tr.id} opacity={arcOpacity}>
-              <path
-                d={d}
-                fill="none"
-                stroke={arcColor}
-                strokeWidth="5.5"
-                strokeLinecap="round"
-                opacity="0.22"
-              />
-              <path
-                d={d}
-                fill="none"
-                stroke={arcColor}
-                strokeWidth="2.8"
-                strokeDasharray="10 8"
-                strokeLinecap="round"
-                className="animate-cash-arc"
-              />
-              {arrivePulse > 0 && (
-                <>
-                  <circle
-                    cx={tr.endX}
-                    cy={tr.endY}
-                    r={16 + (1 - arrivePulse) * 34}
-                    fill="none"
-                    stroke="#FEF08A"
-                    strokeWidth="3.2"
-                    opacity={arrivePulse * 0.95}
-                  />
-                  <circle
-                    cx={tr.endX}
-                    cy={tr.endY}
-                    r={12 + arrivePulse * 18}
-                    fill={arcColor}
-                    opacity={arrivePulse * 0.28}
-                  />
-                </>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-
-      {/* Xấp tiền + Chồng xu vàng lớn trượt từ từ ngang sân giữa + đồng xu lấp lánh nối đuôi */}
-      {transfers.map((tr) => {
-        // Ease-in-out mượt mà, chậm rãi dễ nhìn
-        const p = tr.progress;
-        const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-
-        const bundleX = evalQuadBezier(tr.startX, tr.ctrlX, tr.endX, ease);
-        const bundleY = evalQuadBezier(tr.startY, tr.ctrlY, tr.endY, ease) - Math.sin(ease * Math.PI) * 14;
-        const bundleOpacity = p < 0.12 ? p / 0.12 : p > 0.88 ? Math.max(0, (1 - p) / 0.12) : 1;
-        const bundleScale =
-          p < 0.16
-            ? 0.72 + (p / 0.16) * 0.32
-            : p > 0.84
-              ? 1.04 - ((p - 0.84) / 0.16) * 0.34
-              : 1.04 + Math.sin(ease * Math.PI) * 0.08;
-        const tiltDeg = (tr.endX >= tr.startX ? 1 : -1) * Math.sin(ease * Math.PI) * 5;
-
-        const badgeBorder =
-          tr.tone === 'from-bank'
-            ? 'border-emerald-300/95 bg-emerald-950/92 text-emerald-100'
-            : tr.tone === 'player-to-player'
-              ? 'border-sky-300/95 bg-slate-950/92 text-sky-100'
-              : 'border-amber-300/95 bg-slate-950/92 text-amber-100';
-
-        const amountColor =
-          tr.tone === 'from-bank'
-            ? 'text-emerald-300'
-            : tr.tone === 'player-to-player'
-              ? 'text-sky-300'
-              : 'text-amber-300';
-
-        return (
-          <div key={tr.id}>
-            {/* 3 đồng xu vàng nhỏ bay nhẹ nối đuôi phía sau xấp tiền chính */}
-            {tr.items.slice(0, 3).map((item, idx) => {
-              const trailP = Math.max(0, p - (idx + 1) * 0.085);
-              if (trailP <= 0.02 || trailP >= 0.96) return null;
-              const te = trailP < 0.5 ? 2 * trailP * trailP : 1 - Math.pow(-2 * trailP + 2, 2) / 2;
-              const env = Math.sin(te * Math.PI);
-              const cx = evalQuadBezier(tr.startX, tr.ctrlX, tr.endX, te) + item.spreadX * 0.8 * env;
-              const cy = evalQuadBezier(tr.startY, tr.ctrlY, tr.endY, te) + item.spreadY * 0.8 * env;
-              const cOp = (trailP < 0.14 ? trailP / 0.14 : trailP > 0.85 ? (1 - trailP) / 0.15 : 1) * 0.88;
-              return (
-                <div
-                  key={idx}
-                  style={{
-                    left: cx,
-                    top: cy,
-                    opacity: cOp,
-                    transform: `translate(-50%, -50%) rotate(${item.rotStart + te * 140}deg) scale(${0.8 + env * 0.25})`,
-                  }}
-                  className="absolute"
-                >
-                  <TrailingGoldCoinSvg />
-                </div>
-              );
-            })}
-
-            {/* Cọc tiền + Chồng xu vàng chính trượt chầm chậm rõ nét ngay giữa màn hình */}
-            <div
-              style={{
-                left: bundleX,
-                top: bundleY,
-                opacity: bundleOpacity,
-                transform: `translate(-50%, -50%) rotate(${tiltDeg}deg) scale(${bundleScale})`,
-              }}
-              className="absolute flex flex-col items-center"
-            >
-              <div
-                className={`mb-1 flex items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3 py-0.5 text-xs font-black shadow-[0_8px_22px_rgba(0,0,0,0.75)] backdrop-blur-sm ${badgeBorder}`}
-              >
-                <span>{tr.fromName}</span>
-                <span className="text-amber-300">➔</span>
-                <span>{tr.toName}</span>
-                <span className={`ml-0.5 font-black ${amountColor}`}>
-                  {tr.tone === 'from-bank' ? '+' : tr.tone === 'to-bank' ? '-' : ''}
-                  {formatShortVnd(tr.amount)}
-                </span>
-                {tr.reasonText && (
-                  <span className="inline rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] font-bold opacity-90">
-                    {tr.reasonText}
-                  </span>
-                )}
-              </div>
-              <CashStackBundleSvg tone={tr.tone} />
-            </div>
-          </div>
-        );
-      })}
+      {transfers.map((tr) => (
+        <CashTransferFlightItem key={tr.id} tr={tr} />
+      ))}
     </div>
   );
-}
+});

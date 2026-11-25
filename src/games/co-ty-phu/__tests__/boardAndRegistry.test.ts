@@ -114,13 +114,38 @@ describe('Kiến trúc Sảnh Ngoài & Dữ liệu 52 Ô Mặc Định', () => {
     expect(hexes.size).toBe(8);
   });
 
-  it('Toàn bộ 32 thẻ Cơ Hội & Khí Vận và 30 địa danh đều có ảnh minh họa hợp lệ', () => {
+  it('Toàn bộ 32 thẻ Cơ Hội & Khí Vận cân bằng 50/50 (mỗi bộ đúng 1 Vô Tù + 1 Miễn Tù + 7 Tích cực + 7 Thử thách) và đủ ảnh SVG', () => {
     expect(CHANCE_CARDS).toHaveLength(16);
     expect(FATE_CARDS).toHaveLength(16);
-    for (const card of [...CHANCE_CARDS, ...FATE_CARDS]) {
-      const art = getCardArtworkUrl(card.id);
-      expect(art, `Thiếu ảnh thẻ ${card.id}`).toBeDefined();
-      expect(art!.length).toBeGreaterThan(0);
+
+    const classifyCard = (card: (typeof CHANCE_CARDS)[number]) => {
+      switch (card.effect.type) {
+        case 'GO_TO_JAIL':
+          return 'JAIL';
+        case 'JAIL_FREE_CARD':
+          return 'JAIL_FREE';
+        case 'FLY_NEAREST_AIRPORT':
+        case 'MOVE_TO_TILE':
+        case 'COLLECT_FROM_OTHERS':
+          return 'GOOD';
+        case 'MOVE_BACKWARDS':
+        case 'REPAIR_BUILDINGS':
+        case 'PAY_EACH_OTHER':
+          return 'BAD';
+        case 'CASH_DELTA':
+          return card.effect.amount >= 0 ? 'GOOD' : 'BAD';
+      }
+    };
+
+    for (const deck of [CHANCE_CARDS, FATE_CARDS]) {
+      const counts = { JAIL: 0, JAIL_FREE: 0, GOOD: 0, BAD: 0 };
+      for (const card of deck) {
+        counts[classifyCard(card)] += 1;
+        const art = getCardArtworkUrl(card.id);
+        expect(art, `Thiếu ảnh thẻ ${card.id}`).toBeDefined();
+        expect(art!.length).toBeGreaterThan(0);
+      }
+      expect(counts).toEqual({ JAIL: 1, JAIL_FREE: 1, GOOD: 7, BAD: 7 });
     }
 
     const picturedTiles = DEFAULT_BOARD_TILES.filter(

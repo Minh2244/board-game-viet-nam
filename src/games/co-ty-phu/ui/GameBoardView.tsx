@@ -142,13 +142,8 @@ interface AirportFlightState {
   ctrlY: number;
   endX: number;
   endY: number;
-  planeX: number;
-  planeY: number;
-  angleDeg: number;
-  progress: number;
   playerName: string;
   destinationName: string;
-  puffs: { x: number; y: number; opacity: number }[];
 }
 
 interface FlyingCardState {
@@ -747,7 +742,7 @@ const BoardTileCell = memo(function BoardTileCell({
         )}
 
         <span
-          className={`w-full px-0.5 pt-[2px] text-[9px] leading-[1.22] font-black tracking-tight [text-shadow:0_1px_3px_rgba(0,0,0,0.98)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)] ${
+          className={`w-full px-0.5 pt-[2px] text-[9px] leading-[1.22] font-black tracking-tight [text-shadow:0_1px_3px_rgba(0,0,0,0.98)] ${
             tile.kind === 'AUCTION_STATION'
               ? 'text-amber-200'
               : tile.kind === 'UTILITY'
@@ -758,7 +753,7 @@ const BoardTileCell = memo(function BoardTileCell({
           {topTitle}
         </span>
         {priceText && (
-          <span className="mt-[1px] max-w-full whitespace-nowrap px-0.5 text-[9.5px] leading-[1.15] font-black text-amber-200 [text-shadow:0_1px_3px_rgba(0,0,0,0.98)] drop-shadow-[0_1px_3px_rgba(0,0,0,0.98)]">
+          <span className="mt-[1px] max-w-full whitespace-nowrap px-0.5 text-[9.5px] leading-[1.15] font-black text-amber-200 [text-shadow:0_1px_3px_rgba(0,0,0,0.98)]">
             {priceText}
           </span>
         )}
@@ -767,15 +762,18 @@ const BoardTileCell = memo(function BoardTileCell({
   );
 });
 
-/** Hiển thị số dư tiền chạy số mượt mà (rolling counter) kèm chớp sáng xanh/đỏ khi biến động */
+/** Hiển thị số dư tiền chạy số mượt mà (rolling counter cập nhật thẳng textContent — 0 React re-render 60fps!) */
 function AnimatedCashValue({ value, className = '' }: { value: number; className?: string }) {
-  const [shown, setShown] = useState(value);
   const [flash, setFlash] = useState<'up' | 'down' | null>(null);
+  const spanRef = useRef<HTMLSpanElement | null>(null);
   const prevRef = useRef(value);
 
   useEffect(() => {
     const from = prevRef.current;
-    if (from === value) return;
+    if (from === value) {
+      if (spanRef.current) spanRef.current.textContent = formatShortVnd(value);
+      return;
+    }
     prevRef.current = value;
     setFlash(value > from ? 'up' : 'down');
 
@@ -785,11 +783,12 @@ function AnimatedCashValue({ value, className = '' }: { value: number; className
     const tick = (now: number) => {
       const t = Math.min(1, (now - start) / dur);
       const ease = 1 - Math.pow(1 - t, 3);
-      setShown(Math.round(from + (value - from) * ease));
+      const cur = t < 1 ? Math.round(from + (value - from) * ease) : value;
+      if (spanRef.current) {
+        spanRef.current.textContent = formatShortVnd(cur);
+      }
       if (t < 1) {
         raf = requestAnimationFrame(tick);
-      } else {
-        setShown(value);
       }
     };
     raf = requestAnimationFrame(tick);
@@ -808,8 +807,8 @@ function AnimatedCashValue({ value, className = '' }: { value: number; className
         : '';
 
   return (
-    <span className={`inline-block transition-all duration-200 ${className} ${flashCls}`}>
-      {formatShortVnd(shown)}
+    <span ref={spanRef} className={`inline-block transition-all duration-200 ${className} ${flashCls}`}>
+      {formatShortVnd(value)}
     </span>
   );
 }
@@ -850,8 +849,8 @@ function BoardVfxLayer({
       {popups.map((pop) => (
         <div
           key={pop.id}
-          style={{ left: pop.x, top: pop.y }}
-          className={`absolute -translate-x-1/2 -translate-y-1/2 animate-bounce rounded-full border px-2.5 py-1 text-xs font-black shadow-xl backdrop-blur-xs ${
+          style={{ left: 0, top: 0, transform: `translate3d(${pop.x}px, ${pop.y}px, 0) translate(-50%, -50%)` }}
+          className={`absolute animate-bounce rounded-full border px-2.5 py-1 text-xs font-black shadow-xl ${
             pop.positive
               ? 'border-emerald-200/80 bg-emerald-600/95 text-white'
               : 'border-rose-200/80 bg-rose-600/95 text-white'
@@ -932,20 +931,18 @@ export function GameBoardView({
   const wasLocalChargingRef = useRef<boolean>(false);
   const lastRollPowerRef = useRef<number>(0.58);
 
-  const { stageW, stageH, scale, rotated, isCompactDevice, toLocalRect } =
+  const { stageW, stageH, scale, rotated, toLocalRect } =
     useLandscapeStage();
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Chế độ Mượt: tự bật sẵn trên Điện thoại/Tablet nhỏ để chống lag 60fps, PC mặc định tắt (có thể bật/tắt bất cứ lúc nào)
+  // Mặc định TẮT chế độ hạ đồ họa trên cả PC lẫn Điện Thoại nhờ kiến trúc 0 re-render & GPU translate3d!
+  // Chỉ bật nếu người chơi chủ động bấm nút Tiết kiệm pin ('1').
   const [smoothMode, setSmoothMode] = useState<boolean>(() => {
     try {
-      const saved = window.localStorage.getItem('bgvn_cotyphu_smooth_mode');
-      if (saved === '1') return true;
-      if (saved === '0') return false;
+      return window.localStorage.getItem('bgvn_cotyphu_smooth_mode') === '1';
     } catch {
-      // Ignore storage errors
+      return false;
     }
-    return isCompactDevice || (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches);
   });
   const smoothModeRef = useRef(smoothMode);
   smoothModeRef.current = smoothMode;
@@ -979,6 +976,8 @@ export function GameBoardView({
   const fateDeckRef = useRef<HTMLDivElement | null>(null);
   const playerRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pawnElRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const airportJetRef = useRef<HTMLDivElement | null>(null);
+  const airportPuffRefs = useRef<(SVGCircleElement | null)[]>([]);
   const mountedRef = useRef(true);
   const lastTurnPlayerIdRef = useRef<string>(initialState.players[initialState.currentPlayerIndex]?.id ?? '');
 
@@ -1146,7 +1145,6 @@ export function GameBoardView({
   }, []);
 
   const spawnTrailSpark = useCallback((x: number, y: number, color: string) => {
-    if (smoothModeRef.current) return;
     const id = ++fxUid;
     setTrailSparks((prev) => [...prev.slice(-14), { id, x, y, color }]);
     setTimeout(() => {
@@ -1350,7 +1348,7 @@ export function GameBoardView({
         .trim()
         .slice(0, 22);
 
-      const coinCount = smoothModeRef.current ? 2 : 4;
+      const coinCount = 4;
       const items: CashParticleSeed[] = Array.from({ length: coinCount }, (_, i) => ({
         delay: i * 0.08,
         isCoin: true,
@@ -1372,21 +1370,30 @@ export function GameBoardView({
 
       const id = ++fxUid;
       const durationMs = 1520;
-      let arrived = false;
 
+      // Đẩy 1 object duy nhất sang CashTransferOverlay (tự chạy RAF DOM ref + translate3d -> 0 React re-render trên GameBoardView!)
       await new Promise<void>((resolve) => {
-        const tStart = performance.now();
-        let lastCommitTime = 0;
-
-        const tick = (now: number) => {
-          if (!mountedRef.current) {
-            resolve();
-            return;
-          }
-          const t = Math.min(1, (now - tStart) / durationMs);
-
-          if (!arrived && t >= 0.78) {
-            arrived = true;
+        if (!mountedRef.current) {
+          resolve();
+          return;
+        }
+        const transferSpec: ActiveCashTransfer = {
+          id,
+          startX: start.x,
+          startY: start.y,
+          ctrlX,
+          ctrlY,
+          endX: end.x,
+          endY: end.y,
+          amount: absAmount,
+          tone,
+          fromName,
+          toName,
+          reasonText: cleanedReason,
+          durationMs,
+          items,
+          onArrive: () => {
+            if (!mountedRef.current) return;
             if (toId === 'BANK') {
               triggerBankPulse('in');
               showTransientBankNote(`Thu +${formatShortVnd(absAmount)}`, 'in');
@@ -1402,47 +1409,15 @@ export function GameBoardView({
               tone === 'from-bank' ? '#34D399' : tone === 'player-to-player' ? '#38BDF8' : '#FBBF24',
             );
             onArrive();
-          }
-
-          // Trên điện thoại (smoothMode), giới hạn cập nhật React state ở ~30fps để không nghẽn luồng chính
-          const minStepMs = smoothModeRef.current ? 32 : 0;
-          if (t >= 1 || now - lastCommitTime >= minStepMs) {
-            lastCommitTime = now;
-            setCashTransfers((prev) => {
-              const exists = prev.some((tr) => tr.id === id);
-              const updated: ActiveCashTransfer = {
-                id,
-                startX: start.x,
-                startY: start.y,
-                ctrlX,
-                ctrlY,
-                endX: end.x,
-                endY: end.y,
-                amount: absAmount,
-                tone,
-                fromName,
-                toName,
-                reasonText: cleanedReason,
-                progress: t,
-                items,
-              };
-              return exists ? prev.map((tr) => (tr.id === id ? updated : tr)) : [...prev, updated];
-            });
-          }
-
-          if (t < 1) {
-            requestAnimationFrame(tick);
-          } else {
-            if (!arrived) {
-              arrived = true;
-              onArrive();
+          },
+          onComplete: () => {
+            if (mountedRef.current) {
+              setCashTransfers((prev) => prev.filter((tr) => tr.id !== id));
             }
-            setCashTransfers((prev) => prev.filter((tr) => tr.id !== id));
             resolve();
-          }
+          },
         };
-
-        requestAnimationFrame(tick);
+        setCashTransfers((prev) => [...prev, transferSpec]);
       });
 
       // Giữ thêm 260ms để người xem thấy rõ số tiền bên nhận vừa nhảy xong trước khi trả Ngân Hàng lại bên phải
@@ -1522,10 +1497,8 @@ export function GameBoardView({
 
             const pawnEl = pawnElRefs.current[playerId];
             if (pawnEl) {
-              pawnEl.style.left = `${x}px`;
-              pawnEl.style.top = `${y}px`;
               pawnEl.style.zIndex = '45';
-              pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
+              pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
             } else if (mountedRef.current) {
               setActivePawnAnim(currentAnim);
             }
@@ -1539,7 +1512,7 @@ export function GameBoardView({
           requestAnimationFrame(tick);
         });
 
-        if (mountedRef.current && !smoothModeRef.current) {
+        if (mountedRef.current) {
           setFlashingTileIdx(toIdx);
           spawnShockwave(p1.x, p1.y, landHex);
         }
@@ -1561,7 +1534,7 @@ export function GameBoardView({
     [getTileCenter, spawnShockwave, spawnTrailSpark],
   );
 
-  /** Diễn hoạt Sân Bay kiểu điện ảnh: ẩn xúc xắc + máy bay thương mại trắng-đỏ KHỔNG LỒ lướt vắt ngang sân giữa kèm bảng thông báo điểm đến */
+  /** Diễn hoạt Sân Bay kiểu điện ảnh thuần GPU translate3d (0 React re-render suốt 1.65s bay!) */
   const animateDomAirportFlight = useCallback(
     async (
       playerId: string,
@@ -1578,9 +1551,22 @@ export function GameBoardView({
       const midY = stageH * 0.44;
       const dur = 1650;
 
+      // Mount lớp Sân Bay ĐÚNG 1 LẦN duy nhất, sau đó điều khiển máy bay & vệt mây bằng DOM ref trong RAF!
+      if (mountedRef.current) {
+        setAirportFlight({
+          startX: p0.x,
+          startY: p0.y,
+          ctrlX: midX,
+          ctrlY: midY,
+          endX: p1.x,
+          endY: p1.y,
+          playerName,
+          destinationName,
+        });
+      }
+
       await new Promise<void>((resolve) => {
         const tStart = performance.now();
-        let lastCommitTime = 0;
         const puffs: { x: number; y: number; opacity: number }[] = [];
 
         const tick = (now: number) => {
@@ -1591,10 +1577,9 @@ export function GameBoardView({
           const y = u * u * p0.y + 2 * u * ease * midY + ease * ease * p1.y;
           const dx = 2 * u * (midX - p0.x) + 2 * ease * (p1.x - midX);
           const dy = 2 * u * (midY - p0.y) + 2 * ease * (p1.y - midY);
-          // GiantAirportJetSvg mũi hướng lên (0°), cộng +90° để xoay đúng chiều vector bay
           const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
 
-          if (!smoothModeRef.current && Math.random() < 0.55 && t < 0.92) {
+          if (Math.random() < 0.55 && t < 0.92) {
             puffs.push({ x, y, opacity: 0.9 });
             if (puffs.length > 18) puffs.shift();
           }
@@ -1614,30 +1599,28 @@ export function GameBoardView({
           };
           const pawnEl = pawnElRefs.current[playerId];
           if (pawnEl) {
-            pawnEl.style.left = `${x}px`;
-            pawnEl.style.top = `${y}px`;
             pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) scale(0.55, 0.55)`;
+            pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) scale(0.55, 0.55)`;
           }
 
-          const minStepMs = smoothModeRef.current ? 32 : 0;
-          if (mountedRef.current && (t >= 1 || now - lastCommitTime >= minStepMs)) {
-            lastCommitTime = now;
-            setAirportFlight({
-              startX: p0.x,
-              startY: p0.y,
-              ctrlX: midX,
-              ctrlY: midY,
-              endX: p1.x,
-              endY: p1.y,
-              planeX: x,
-              planeY: y,
-              angleDeg,
-              progress: t,
-              playerName,
-              destinationName,
-              puffs: puffs.map((pf) => ({ ...pf })),
-            });
+          const jetEl = airportJetRef.current;
+          if (jetEl) {
+            const jetScale = 0.58 + Math.sin(t * Math.PI) * 0.62;
+            jetEl.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) rotate(${angleDeg}deg) scale(${jetScale})`;
+          }
+
+          for (let i = 0; i < 18; i += 1) {
+            const c = airportPuffRefs.current[i];
+            if (!c) continue;
+            const pf = puffs[i];
+            if (pf && pf.opacity > 0.01) {
+              c.setAttribute('cx', String(pf.x));
+              c.setAttribute('cy', String(pf.y));
+              c.setAttribute('r', String(7 + i * 0.45));
+              c.setAttribute('opacity', String(pf.opacity * 0.68));
+            } else {
+              c.setAttribute('opacity', '0');
+            }
           }
 
           if (t < 1 && mountedRef.current) {
@@ -1660,7 +1643,7 @@ export function GameBoardView({
         }, 420);
       }
     },
-    [getTileCenter, spawnShockwave],
+    [getTileCenter, spawnShockwave, stageW, stageH],
   );
 
   /** Diễn hoạt Bị Bắt Vào Tù (ô 16): bay thẳng tới Trại Giam + sập song sắt + rung nhẹ mặt bàn */
@@ -1691,10 +1674,8 @@ export function GameBoardView({
           };
           const pawnEl = pawnElRefs.current[playerId];
           if (pawnEl) {
-            pawnEl.style.left = `${x}px`;
-            pawnEl.style.top = `${y}px`;
             pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate(-50%, -56%) translateY(${liftY}px) rotate(${tiltDeg}deg)`;
+            pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg)`;
           } else if (mountedRef.current) {
             setActivePawnAnim(livePawnOverrideRef.current);
           }
@@ -3371,10 +3352,11 @@ export function GameBoardView({
                 pawnElRefs.current[p.id] = el;
               }}
               style={{
-                left: x,
-                top: y,
+                left: 0,
+                top: 0,
                 zIndex: isMoving ? 45 : isTurn ? 35 : 28,
-                transform: `translate(-50%, ${isSideStanding ? '-52%' : '-56%'}) translateY(${liftY}px) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`,
+                transform: `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, ${isSideStanding ? '-52%' : '-56%'}) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`,
+                willChange: 'transform',
               }}
               className="absolute flex flex-col items-center"
             >
@@ -3437,7 +3419,7 @@ export function GameBoardView({
           );
         })}
 
-        {/* Hiệu ứng bay Sân Bay điện ảnh: Bảng thông báo giữa sân + Máy bay thương mại trắng-đỏ KHỔNG LỒ lướt qua bàn cờ */}
+        {/* Hiệu ứng bay Sân Bay điện ảnh thuần GPU translate3d: 0 React re-render suốt 1.65s bay! */}
         {airportFlight && (
           <>
             <svg className="absolute inset-0 z-[48] h-full w-full overflow-visible">
@@ -3450,14 +3432,17 @@ export function GameBoardView({
                 strokeLinecap="round"
                 opacity="0.82"
               />
-              {airportFlight.puffs.map((pf, idx) => (
+              {Array.from({ length: 18 }, (_, idx) => (
                 <circle
                   key={idx}
-                  cx={pf.x}
-                  cy={pf.y}
+                  ref={(el) => {
+                    airportPuffRefs.current[idx] = el;
+                  }}
+                  cx={airportFlight.startX}
+                  cy={airportFlight.startY}
                   r={7 + idx * 0.45}
                   fill="#F8FAFC"
-                  opacity={pf.opacity * 0.68}
+                  opacity="0"
                 />
               ))}
             </svg>
@@ -3465,7 +3450,7 @@ export function GameBoardView({
             {/* Bảng thông báo chuyến bay kiểu cổ điển ngay giữa sân */}
             <div
               data-testid="airport-flight-banner"
-              className="absolute left-1/2 top-[56%] z-[49] -translate-x-1/2 -translate-y-1/2 rounded-2xl border-2 border-sky-200/80 bg-slate-950/88 px-6 py-3 text-center shadow-[0_18px_46px_rgba(0,0,0,0.8)] backdrop-blur-sm"
+              className="absolute left-1/2 top-[56%] z-[49] -translate-x-1/2 -translate-y-1/2 rounded-2xl border-2 border-sky-200/80 bg-slate-950/92 px-6 py-3 text-center shadow-[0_18px_46px_rgba(0,0,0,0.8)]"
             >
               <div className="text-lg font-black tracking-wide text-white">
                 ✈ <span className="text-amber-300">{airportFlight.playerName}</span> đang bay đến ô{' '}
@@ -3473,15 +3458,15 @@ export function GameBoardView({
               </div>
             </div>
 
-            {/* Máy bay thương mại trắng-đỏ KHỔNG LỒ bay vắt ngang bàn cờ (phóng to khi qua giữa sân) */}
+            {/* Máy bay thương mại trắng-đỏ KHỔNG LỒ bay vắt ngang bàn cờ (cập nhật thẳng DOM ref translate3d!) */}
             <div
+              ref={airportJetRef}
               data-testid="giant-airport-jet"
               style={{
-                left: airportFlight.planeX,
-                top: airportFlight.planeY,
-                transform: `translate(-50%, -50%) rotate(${airportFlight.angleDeg}deg) scale(${
-                  0.58 + Math.sin(airportFlight.progress * Math.PI) * 0.62
-                })`,
+                left: 0,
+                top: 0,
+                transform: `translate3d(${airportFlight.startX}px, ${airportFlight.startY}px, 0) translate(-50%, -50%) scale(0.58)`,
+                willChange: 'transform',
               }}
               className="absolute z-[52] drop-shadow-[0_26px_28px_rgba(0,0,0,0.72)]"
             >

@@ -3,17 +3,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { handleRealtimeTokenGet } from './api/_realtimeAuth';
 import { handleRoomGet, handleRoomPost } from './api/_roomStore';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Middleware cục bộ cho `vite dev` và `vite preview`:
- * Phục vụ chính xác endpoint `/api/room` dùng chung logic với Vercel Function (`api/room.ts`),
- * giúp test Online 2 tab / 2 điện thoại cùng mạng LAN mà không cần cài thêm server rời!
+ * Phục vụ chính xác cả `/api/room` và `/api/realtime-token` dùng chung logic với Vercel Edge Functions,
+ * giúp test Online 2 tab / 2 điện thoại cùng mạng LAN (hoặc Ably thật qua `.env.local`) mà không cần cài server rời!
  */
-function localRoomApiPlugin(): Plugin {
+function localRoomApiPlugin(localEnv: Record<string, string>): Plugin {
+  const sendJson = (res: ServerResponse, status: number, body: Record<string, unknown>) => {
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.end(JSON.stringify(body));
+  };
+
   const attachMiddleware = (
     middlewares: {
       use: (
@@ -22,6 +30,22 @@ function localRoomApiPlugin(): Plugin {
       ) => void;
     },
   ) => {
+    middlewares.use('/api/realtime-token', (req, res, next) => {
+      const method = (req.method || 'GET').toUpperCase();
+      if (method !== 'GET') {
+        next();
+        return;
+      }
+      const fullUrl = new URL(req.url || '/', 'http://localhost');
+      const key = process.env.ABLY_API_KEY || localEnv.ABLY_API_KEY || '';
+      void handleRealtimeTokenGet(fullUrl, key)
+        .then((result) => sendJson(res, result.status, result.body))
+        .catch((err) => {
+          console.error('[local /api/realtime-token GET]', err);
+          sendJson(res, 200, { ok: true, enabled: false, reason: 'SERVER_ERROR' });
+        });
+    });
+
     middlewares.use('/api/room', (req, res, next) => {
       const method = (req.method || 'GET').toUpperCase();
       if (method !== 'GET' && method !== 'POST') {
@@ -29,20 +53,13 @@ function localRoomApiPlugin(): Plugin {
         return;
       }
 
-      const sendJson = (status: number, body: Record<string, unknown>) => {
-        res.statusCode = status;
-        res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-store, max-age=0');
-        res.end(JSON.stringify(body));
-      };
-
       if (method === 'GET') {
         const fullUrl = new URL(req.url || '/', 'http://localhost');
         void handleRoomGet(fullUrl)
-          .then((result) => sendJson(result.status, result.body))
+          .then((result) => sendJson(res, result.status, result.body))
           .catch((err) => {
             console.error('[local /api/room GET]', err);
-            sendJson(500, { ok: false, error: 'SERVER_ERROR', message: 'Lỗi máy chủ cục bộ.' });
+            sendJson(res, 500, { ok: false, error: 'SERVER_ERROR', message: 'Lỗi máy chủ cục bộ.' });
           });
         return;
       }
@@ -54,13 +71,13 @@ function localRoomApiPlugin(): Plugin {
           const raw = Buffer.concat(chunks).toString('utf8');
           const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
           void handleRoomPost(parsed)
-            .then((result) => sendJson(result.status, result.body))
+            .then((result) => sendJson(res, result.status, result.body))
             .catch((err) => {
               console.error('[local /api/room POST]', err);
-              sendJson(500, { ok: false, error: 'SERVER_ERROR', message: 'Lỗi máy chủ cục bộ.' });
+              sendJson(res, 500, { ok: false, error: 'SERVER_ERROR', message: 'Lỗi máy chủ cục bộ.' });
             });
         } catch {
-          sendJson(400, { ok: false, error: 'BAD_JSON', message: 'Dữ liệu JSON không hợp lệ.' });
+          sendJson(res, 400, { ok: false, error: 'BAD_JSON', message: 'Dữ liệu JSON không hợp lệ.' });
         }
       });
     });
@@ -77,33 +94,39 @@ function localRoomApiPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), tailwindcss(), localRoomApiPlugin()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, 'src'),
+export default defineConfig(({ mode }) => {
+  const localEnv = loadEnv(mode, process.cwd(), '');
+  return {
+    plugins: [react(), tailwindcss(), localRoomApiPlugin(localEnv)],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'src'),
+      },
     },
-  },
-  build: {
-    outDir: 'dist',
-    chunkSizeWarningLimit: 550,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules/three')) {
-            return 'three-engine';
-          }
-          if (
-            id.includes('node_modules/react') ||
-            id.includes('node_modules/react-dom') ||
-            id.includes('node_modules/zustand') ||
-            id.includes('node_modules/lucide-react')
-          ) {
-            return 'vendor';
-          }
-          return undefined;
+    build: {
+      outDir: 'dist',
+      chunkSizeWarningLimit: 550,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/three')) {
+              return 'three-engine';
+            }
+            if (id.includes('node_modules/ably')) {
+              return 'ably-realtime';
+            }
+            if (
+              id.includes('node_modules/react') ||
+              id.includes('node_modules/react-dom') ||
+              id.includes('node_modules/zustand') ||
+              id.includes('node_modules/lucide-react')
+            ) {
+              return 'vendor';
+            }
+            return undefined;
+          },
         },
       },
     },
-  },
+  };
 });

@@ -94,7 +94,25 @@ export function getPositionHash(
     (castling.wQ ? 'Q' : '') +
     (castling.bK ? 'k' : '') +
     (castling.bQ ? 'q' : '');
-  return `${bStr}|${turn[0]}|${cStr || '-'}|${enPassantTarget ?? '-'}`;
+  // Theo Luật FIDE Điều 9.2: chỉ ghi nhận ô En Passant vào hash lặp 3 lần nếu phe tới lượt thực sự có Tốt đứng cạnh sẵn sàng bắt qua đường
+  let effectiveEp: number | null = null;
+  if (enPassantTarget !== null) {
+    const epRc = sqToRc(enPassantTarget);
+    const pawnRow = turn === 'white' ? epRc.row + 1 : epRc.row - 1;
+    if (pawnRow >= 0 && pawnRow < 8) {
+      for (const dc of [-1, 1]) {
+        const c = epRc.col + dc;
+        if (c >= 0 && c < 8) {
+          const adj = board[rcToSq(pawnRow, c)];
+          if (adj && adj.color === turn && adj.type === 'p') {
+            effectiveEp = enPassantTarget;
+            break;
+          }
+        }
+      }
+    }
+  }
+  return `${bStr}|${turn[0]}|${cStr || '-'}|${effectiveEp ?? '-'}`;
 }
 
 export function findKingSquare(board: ChessBoard, color: ChessColor): number {

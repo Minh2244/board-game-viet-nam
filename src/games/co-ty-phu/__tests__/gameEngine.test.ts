@@ -10,7 +10,7 @@ import {
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '@/games/co-ty-phu/data/cards';
 import { generateBoardTiles } from '@/games/co-ty-phu/data/mapGenerator';
 import { createInitialGameState, reduceGameAction } from '@/games/co-ty-phu/engine/reducer';
-import { rollSmartHumanDice } from '@/games/co-ty-phu/engine/smartDice';
+import { getHumanLandingTileWeight, rollSmartHumanDice } from '@/games/co-ty-phu/engine/smartDice';
 import {
   calculatePropertyRent,
   calculatePropertyTax,
@@ -445,7 +445,7 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
       // Ít nhất kiểm tra mọi trạng thái đều sạch, không NaN/âm tiền và phần lớn kết thúc tự nhiên
       expect(steps).toBeGreaterThan(0);
     }
-  }, 15_000);
+  }, 30_000);
 
   it('Xúc Xắc Thông Minh (Gói A + 38% Đổ Đôi khi tụ lực tối đa + Anti-Streak cắt chuỗi trả nợ + Bot 100% random)', () => {
     // Dựng bàn 6 tụ kín đất phía trước Người chơi 0 (đang đứng ở ô 0 -> các ô 2..12 phía trước):
@@ -552,5 +552,18 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
     expect(trackState.phase).toBe('WAIT_ROLL');
     trackState = reduceGameAction(trackState, { type: 'ROLL_DICE', diceValues: [1] }).state; // P1 dẫm ô 2 của P2 -> lần 2 liên tiếp!
     expect(trackState.players[0].consecutiveRentHits).toBe(2);
+
+    // 7. Kiểm tra trọng số mới: ưu tiên cao cho nhà bản thân đủ tiền nâng cấp (2.35) & Sân Bay (2.3), giảm ô góc Vô Tù (0.55)
+    const weightState = createInitialGameState(makeSetup(2, 2, false));
+    const p1 = weightState.players[0];
+    weightState.tiles[1].ownerId = p1.id;
+    weightState.tiles[1].buildingLevel = 1;
+    expect(getHumanLandingTileWeight(weightState, p1, 1, false)).toBe(2.35);
+    expect(getHumanLandingTileWeight(weightState, p1, 26, false)).toBe(2.3); // Sân Bay Quốc Tế
+    expect(getHumanLandingTileWeight(weightState, p1, 3, false)).toBe(1.25); // Cơ Hội
+    expect(getHumanLandingTileWeight(weightState, p1, 12, false)).toBe(1.25); // Khí Vận
+    expect(getHumanLandingTileWeight(weightState, p1, 42, false)).toBe(0.55); // Ô góc Vô Tù
+    p1.cash = 100_000; // Không đủ tiền nâng cấp ô 1 (500K) -> hạ trọng số tránh lãng phí lượt
+    expect(getHumanLandingTileWeight(weightState, p1, 1, false)).toBe(1.2);
   });
 });

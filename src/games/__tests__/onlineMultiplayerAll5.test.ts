@@ -40,6 +40,13 @@ function installLocalRoomFetchBridge(metrics: FetchMetrics): () => void {
     const url = new URL(rawUrl, 'http://localhost');
     const method = (init?.method || 'GET').toUpperCase();
 
+    if (url.pathname === '/api/realtime-token') {
+      return new Response(JSON.stringify({ ok: true, enabled: false, reason: 'TEST_HTTP_ONLY' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
     if (url.pathname === '/api/room') {
       if (method === 'GET') {
         const started = Date.now();

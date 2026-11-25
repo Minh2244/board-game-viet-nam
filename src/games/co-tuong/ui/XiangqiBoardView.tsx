@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -102,6 +102,250 @@ const STAR_MARKERS: readonly [number, number][] = [
   [0, 3], [2, 3], [4, 3], [6, 3], [8, 3],
   [0, 6], [2, 6], [4, 6], [6, 6], [8, 6],
 ];
+
+/**
+ * Mặt bàn gỗ hoàng dương 9×10 tĩnh tách riêng React.memo + GPU compositing layer:
+ * Bộ lọc vân gỗ feTurbulence chỉ rasterize ĐÚNG 1 LẦN duy nhất lúc mở bàn cờ (0 tốn GPU khi chọn/trượt quân trên ĐT!).
+ */
+const XiangqiStaticBoardSvg = memo(function XiangqiStaticBoardSvg({
+  svgUid,
+  labelMode,
+}: {
+  svgUid: string;
+  labelMode: 'han' | 'vi';
+}) {
+  return (
+    <svg
+      viewBox={`0 0 ${VB_W} ${VB_H}`}
+      className="h-full w-full rounded-[22px]"
+      style={{ contain: 'layout style paint', transform: 'translateZ(0)' }}
+    >
+      <defs>
+        <linearGradient id={`frame_${svgUid}`} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#7C4620" />
+          <stop offset="45%" stopColor="#542C11" />
+          <stop offset="100%" stopColor="#321807" />
+        </linearGradient>
+
+        <linearGradient id={`woodBase_${svgUid}`} x1="0.08" y1="0" x2="0.95" y2="1">
+          <stop offset="0%" stopColor="#F5DCBA" />
+          <stop offset="38%" stopColor="#E9C692" />
+          <stop offset="72%" stopColor="#DDB274" />
+          <stop offset="100%" stopColor="#CB9957" />
+        </linearGradient>
+
+        <radialGradient id={`woodSheen_${svgUid}`} cx="25%" cy="18%" r="75%">
+          <stop offset="0%" stopColor="#FFF7E4" stopOpacity="0.34" />
+          <stop offset="55%" stopColor="#FFF0D1" stopOpacity="0.04" />
+          <stop offset="100%" stopColor="#4A250A" stopOpacity="0.22" />
+        </radialGradient>
+
+        <filter id={`woodGrain_${svgUid}`} x="0%" y="0%" width="100%" height="100%">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.014 0.19"
+            numOctaves="3"
+            seed="7"
+            result="noise"
+          />
+          <feColorMatrix
+            type="matrix"
+            values="0.35 0 0 0 0.45  0.22 0 0 0 0.25  0.08 0 0 0 0.08  0 0 0 0.14 0"
+            in="noise"
+            result="grain"
+          />
+        </filter>
+
+        <clipPath id={`boardInner_${svgUid}`}>
+          <rect x="13" y="13" width={VB_W - 26} height={VB_H - 26} rx="12" />
+        </clipPath>
+      </defs>
+
+      <rect x="0" y="0" width={VB_W} height={VB_H} rx="20" fill={`url(#frame_${svgUid})`} />
+      <rect
+        x="2"
+        y="2"
+        width={VB_W - 4}
+        height={VB_H - 4}
+        rx="18"
+        fill="none"
+        stroke="rgba(255, 224, 174, 0.25)"
+        strokeWidth="1.8"
+      />
+      <g stroke="#291205" strokeOpacity="0.48" strokeWidth="1.2">
+        <line x1="2" y1="2" x2="15" y2="15" />
+        <line x1={VB_W - 2} y1="2" x2={VB_W - 15} y2="15" />
+        <line x1="2" y1={VB_H - 2} x2="15" y2={VB_H - 15} />
+        <line x1={VB_W - 2} y1={VB_H - 2} x2={VB_W - 15} y2={VB_H - 15} />
+      </g>
+
+      <rect
+        x="13"
+        y="13"
+        width={VB_W - 26}
+        height={VB_H - 26}
+        rx="12"
+        fill={`url(#woodBase_${svgUid})`}
+        stroke="#5A2F10"
+        strokeWidth="2.4"
+      />
+      <rect
+        x="13"
+        y="13"
+        width={VB_W - 26}
+        height={VB_H - 26}
+        rx="12"
+        filter={`url(#woodGrain_${svgUid})`}
+        clipPath={`url(#boardInner_${svgUid})`}
+      />
+
+      <g
+        clipPath={`url(#boardInner_${svgUid})`}
+        fill="none"
+        stroke="#8B5320"
+        strokeOpacity="0.11"
+        strokeWidth="1.35"
+      >
+        <path d="M 10 68 Q 160 58, 320 72 T 535 64" />
+        <path d="M 10 138 Q 210 148, 390 132 T 535 142" />
+        <path d="M 10 218 Q 140 206, 310 222 T 535 212" />
+        <path d="M 10 302 Q 200 314, 380 296 T 535 308" />
+        <path d="M 10 386 Q 170 374, 350 390 T 535 382" />
+        <path d="M 10 468 Q 220 478, 410 462 T 535 474" />
+        <path d="M 10 544 Q 160 534, 340 550 T 535 540" />
+      </g>
+
+      <rect
+        x="13"
+        y="13"
+        width={VB_W - 26}
+        height={VB_H - 26}
+        rx="12"
+        fill={`url(#woodSheen_${svgUid})`}
+      />
+
+      <rect
+        x={PAD_X - 7}
+        y={PAD_Y - 7}
+        width={8 * STEP + 14}
+        height={9 * STEP + 14}
+        fill="none"
+        stroke="#3E1E0A"
+        strokeWidth="2.8"
+      />
+      <rect
+        x={PAD_X - 11}
+        y={PAD_Y - 11}
+        width={8 * STEP + 22}
+        height={9 * STEP + 22}
+        fill="none"
+        stroke="#6B3A18"
+        strokeOpacity="0.45"
+        strokeWidth="1"
+      />
+
+      {Array.from({ length: 10 }, (_, r) => {
+        const y = PAD_Y + r * STEP;
+        return (
+          <line
+            key={`h_${r}`}
+            x1={PAD_X}
+            y1={y}
+            x2={PAD_X + 8 * STEP}
+            y2={y}
+            stroke="#3E1E0A"
+            strokeWidth={r === 0 || r === 9 ? '2.2' : '1.45'}
+          />
+        );
+      })}
+
+      {Array.from({ length: 9 }, (_, c) => {
+        const x = PAD_X + c * STEP;
+        if (c === 0 || c === 8) {
+          return (
+            <line
+              key={`v_${c}`}
+              x1={x}
+              y1={PAD_Y}
+              x2={x}
+              y2={PAD_Y + 9 * STEP}
+              stroke="#3E1E0A"
+              strokeWidth="2.2"
+            />
+          );
+        }
+        return (
+          <g key={`v_${c}`}>
+            <line
+              x1={x}
+              y1={PAD_Y}
+              x2={x}
+              y2={PAD_Y + 4 * STEP}
+              stroke="#3E1E0A"
+              strokeWidth="1.45"
+            />
+            <line
+              x1={x}
+              y1={PAD_Y + 5 * STEP}
+              x2={x}
+              y2={PAD_Y + 9 * STEP}
+              stroke="#3E1E0A"
+              strokeWidth="1.45"
+            />
+          </g>
+        );
+      })}
+
+      <g stroke="#3E1E0A" strokeWidth="1.45">
+        <line x1={gridPx(3, 0).x} y1={gridPx(3, 0).y} x2={gridPx(5, 2).x} y2={gridPx(5, 2).y} />
+        <line x1={gridPx(5, 0).x} y1={gridPx(5, 0).y} x2={gridPx(3, 2).x} y2={gridPx(3, 2).y} />
+        <line x1={gridPx(3, 7).x} y1={gridPx(3, 7).y} x2={gridPx(5, 9).x} y2={gridPx(5, 9).y} />
+        <line x1={gridPx(5, 7).x} y1={gridPx(5, 7).y} x2={gridPx(3, 9).x} y2={gridPx(3, 9).y} />
+      </g>
+
+      <g fill="none" stroke="#3E1E0A" strokeWidth="1.35">
+        {STAR_MARKERS.flatMap(([c, r]) =>
+          buildCrossTicks(c, r).map((d, idx) => <path key={`mk_${c}_${r}_${idx}`} d={d} />),
+        )}
+      </g>
+
+      <text
+        x={PAD_X + 2 * STEP}
+        y={PAD_Y + 4.5 * STEP + 9}
+        textAnchor="middle"
+        fontFamily={
+          labelMode === 'han'
+            ? "'KaiTi', 'STKaiti', 'Noto Serif TC', serif"
+            : "'Be Vietnam Pro', sans-serif"
+        }
+        fontSize={labelMode === 'han' ? '26' : '15.5'}
+        fontWeight="900"
+        letterSpacing={labelMode === 'han' ? '8' : '3'}
+        fill="#4A250C"
+        opacity="0.72"
+      >
+        {labelMode === 'han' ? '楚 河' : 'SỞ HÀ'}
+      </text>
+      <text
+        x={PAD_X + 6 * STEP}
+        y={PAD_Y + 4.5 * STEP + 9}
+        textAnchor="middle"
+        fontFamily={
+          labelMode === 'han'
+            ? "'KaiTi', 'STKaiti', 'Noto Serif TC', serif"
+            : "'Be Vietnam Pro', sans-serif"
+        }
+        fontSize={labelMode === 'han' ? '26' : '15.5'}
+        fontWeight="900"
+        letterSpacing={labelMode === 'han' ? '8' : '3'}
+        fill="#4A250C"
+        opacity="0.72"
+      >
+        {labelMode === 'han' ? '漢 界' : 'HÁN GIỚI'}
+      </text>
+    </svg>
+  );
+});
 
 export function XiangqiBoardView({
   initialState,
@@ -581,246 +825,9 @@ export function XiangqiBoardView({
           className={`relative aspect-[9/10] h-full max-h-[706px] shrink-0 rounded-[22px] shadow-[0_26px_64px_rgba(0,0,0,0.8)] ${
             checkFlash ? 'animate-board-shake' : ''
           }`}
+          style={{ contain: 'layout style paint' }}
         >
-          <svg viewBox={`0 0 ${VB_W} ${VB_H}`} className="h-full w-full rounded-[22px]">
-            <defs>
-              {/* Khung gỗ gụ nâu trầm bo vát 3D */}
-              <linearGradient id={`frame_${svgUid}`} x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#7C4620" />
-                <stop offset="45%" stopColor="#542C11" />
-                <stop offset="100%" stopColor="#321807" />
-              </linearGradient>
-
-              {/* Mặt ván gỗ hoàng dương / gỗ tre vàng ấm tự nhiên */}
-              <linearGradient id={`woodBase_${svgUid}`} x1="0.08" y1="0" x2="0.95" y2="1">
-                <stop offset="0%" stopColor="#F5DCBA" />
-                <stop offset="38%" stopColor="#E9C692" />
-                <stop offset="72%" stopColor="#DDB274" />
-                <stop offset="100%" stopColor="#CB9957" />
-              </linearGradient>
-
-              {/* Ánh bóng vecni gỗ mềm góc trên trái */}
-              <radialGradient id={`woodSheen_${svgUid}`} cx="25%" cy="18%" r="75%">
-                <stop offset="0%" stopColor="#FFF7E4" stopOpacity="0.34" />
-                <stop offset="55%" stopColor="#FFF0D1" stopOpacity="0.04" />
-                <stop offset="100%" stopColor="#4A250A" stopOpacity="0.22" />
-              </radialGradient>
-
-              {/* Bộ lọc tạo thớ vân gỗ thật dọc theo tấm ván */}
-              <filter id={`woodGrain_${svgUid}`} x="0%" y="0%" width="100%" height="100%">
-                <feTurbulence
-                  type="fractalNoise"
-                  baseFrequency="0.014 0.19"
-                  numOctaves="3"
-                  seed="7"
-                  result="noise"
-                />
-                <feColorMatrix
-                  type="matrix"
-                  values="0.35 0 0 0 0.45  0.22 0 0 0 0.25  0.08 0 0 0 0.08  0 0 0 0.14 0"
-                  in="noise"
-                  result="grain"
-                />
-              </filter>
-
-              <clipPath id={`boardInner_${svgUid}`}>
-                <rect x="13" y="13" width={VB_W - 26} height={VB_H - 26} rx="12" />
-              </clipPath>
-            </defs>
-
-            {/* Khung gỗ ngoài có viền vát sáng tối + góc ghép mộng */}
-            <rect x="0" y="0" width={VB_W} height={VB_H} rx="20" fill={`url(#frame_${svgUid})`} />
-            <rect
-              x="2"
-              y="2"
-              width={VB_W - 4}
-              height={VB_H - 4}
-              rx="18"
-              fill="none"
-              stroke="rgba(255, 224, 174, 0.25)"
-              strokeWidth="1.8"
-            />
-            <g stroke="#291205" strokeOpacity="0.48" strokeWidth="1.2">
-              <line x1="2" y1="2" x2="15" y2="15" />
-              <line x1={VB_W - 2} y1="2" x2={VB_W - 15} y2="15" />
-              <line x1="2" y1={VB_H - 2} x2="15" y2={VB_H - 15} />
-              <line x1={VB_W - 2} y1={VB_H - 2} x2={VB_W - 15} y2={VB_H - 15} />
-            </g>
-
-            {/* Mặt ván gỗ hoàng dương + lớp vân gỗ thật + lớp ánh vecni */}
-            <rect
-              x="13"
-              y="13"
-              width={VB_W - 26}
-              height={VB_H - 26}
-              rx="12"
-              fill={`url(#woodBase_${svgUid})`}
-              stroke="#5A2F10"
-              strokeWidth="2.4"
-            />
-            <rect
-              x="13"
-              y="13"
-              width={VB_W - 26}
-              height={VB_H - 26}
-              rx="12"
-              filter={`url(#woodGrain_${svgUid})`}
-              clipPath={`url(#boardInner_${svgUid})`}
-            />
-
-            {/* Các đường thớ gỗ hữu cơ nhẹ chạy dọc tấm bàn */}
-            <g
-              clipPath={`url(#boardInner_${svgUid})`}
-              fill="none"
-              stroke="#8B5320"
-              strokeOpacity="0.11"
-              strokeWidth="1.35"
-            >
-              <path d="M 10 68 Q 160 58, 320 72 T 535 64" />
-              <path d="M 10 138 Q 210 148, 390 132 T 535 142" />
-              <path d="M 10 218 Q 140 206, 310 222 T 535 212" />
-              <path d="M 10 302 Q 200 314, 380 296 T 535 308" />
-              <path d="M 10 386 Q 170 374, 350 390 T 535 382" />
-              <path d="M 10 468 Q 220 478, 410 462 T 535 474" />
-              <path d="M 10 544 Q 160 534, 340 550 T 535 540" />
-            </g>
-
-            {/* Vệt vecni bóng mềm */}
-            <rect
-              x="13"
-              y="13"
-              width={VB_W - 26}
-              height={VB_H - 26}
-              rx="12"
-              fill={`url(#woodSheen_${svgUid})`}
-            />
-
-            {/* Viền đôi truyền thống khắc mực nâu trầm quanh lưới */}
-            <rect
-              x={PAD_X - 7}
-              y={PAD_Y - 7}
-              width={8 * STEP + 14}
-              height={9 * STEP + 14}
-              fill="none"
-              stroke="#3E1E0A"
-              strokeWidth="2.8"
-            />
-            <rect
-              x={PAD_X - 11}
-              y={PAD_Y - 11}
-              width={8 * STEP + 22}
-              height={9 * STEP + 22}
-              fill="none"
-              stroke="#6B3A18"
-              strokeOpacity="0.45"
-              strokeWidth="1"
-            />
-
-            {/* 10 Đường ngang */}
-            {Array.from({ length: 10 }, (_, r) => {
-              const y = PAD_Y + r * STEP;
-              return (
-                <line
-                  key={`h_${r}`}
-                  x1={PAD_X}
-                  y1={y}
-                  x2={PAD_X + 8 * STEP}
-                  y2={y}
-                  stroke="#3E1E0A"
-                  strokeWidth={r === 0 || r === 9 ? '2.2' : '1.45'}
-                />
-              );
-            })}
-
-            {/* 9 Đường dọc */}
-            {Array.from({ length: 9 }, (_, c) => {
-              const x = PAD_X + c * STEP;
-              if (c === 0 || c === 8) {
-                return (
-                  <line
-                    key={`v_${c}`}
-                    x1={x}
-                    y1={PAD_Y}
-                    x2={x}
-                    y2={PAD_Y + 9 * STEP}
-                    stroke="#3E1E0A"
-                    strokeWidth="2.2"
-                  />
-                );
-              }
-              return (
-                <g key={`v_${c}`}>
-                  <line
-                    x1={x}
-                    y1={PAD_Y}
-                    x2={x}
-                    y2={PAD_Y + 4 * STEP}
-                    stroke="#3E1E0A"
-                    strokeWidth="1.45"
-                  />
-                  <line
-                    x1={x}
-                    y1={PAD_Y + 5 * STEP}
-                    x2={x}
-                    y2={PAD_Y + 9 * STEP}
-                    stroke="#3E1E0A"
-                    strokeWidth="1.45"
-                  />
-                </g>
-              );
-            })}
-
-            {/* Đường chéo 2 Cung Tướng 3×3 */}
-            <g stroke="#3E1E0A" strokeWidth="1.45">
-              <line x1={gridPx(3, 0).x} y1={gridPx(3, 0).y} x2={gridPx(5, 2).x} y2={gridPx(5, 2).y} />
-              <line x1={gridPx(5, 0).x} y1={gridPx(5, 0).y} x2={gridPx(3, 2).x} y2={gridPx(3, 2).y} />
-              <line x1={gridPx(3, 7).x} y1={gridPx(3, 7).y} x2={gridPx(5, 9).x} y2={gridPx(5, 9).y} />
-              <line x1={gridPx(5, 7).x} y1={gridPx(5, 7).y} x2={gridPx(3, 9).x} y2={gridPx(3, 9).y} />
-            </g>
-
-            {/* Dấu chữ thập đánh dấu vị trí Pháo & Tốt */}
-            <g fill="none" stroke="#3E1E0A" strokeWidth="1.35">
-              {STAR_MARKERS.flatMap(([c, r]) =>
-                buildCrossTicks(c, r).map((d, idx) => <path key={`mk_${c}_${r}_${idx}`} d={d} />),
-              )}
-            </g>
-
-            {/* Chữ Sông Sở Hà – Hán Giới khắc chìm mềm */}
-            <text
-              x={PAD_X + 2 * STEP}
-              y={PAD_Y + 4.5 * STEP + 9}
-              textAnchor="middle"
-              fontFamily={
-                labelMode === 'han'
-                  ? "'KaiTi', 'STKaiti', 'Noto Serif TC', serif"
-                  : "'Be Vietnam Pro', sans-serif"
-              }
-              fontSize={labelMode === 'han' ? '26' : '15.5'}
-              fontWeight="900"
-              letterSpacing={labelMode === 'han' ? '8' : '3'}
-              fill="#4A250C"
-              opacity="0.72"
-            >
-              {labelMode === 'han' ? '楚 河' : 'SỞ HÀ'}
-            </text>
-            <text
-              x={PAD_X + 6 * STEP}
-              y={PAD_Y + 4.5 * STEP + 9}
-              textAnchor="middle"
-              fontFamily={
-                labelMode === 'han'
-                  ? "'KaiTi', 'STKaiti', 'Noto Serif TC', serif"
-                  : "'Be Vietnam Pro', sans-serif"
-              }
-              fontSize={labelMode === 'han' ? '26' : '15.5'}
-              fontWeight="900"
-              letterSpacing={labelMode === 'han' ? '8' : '3'}
-              fill="#4A250C"
-              opacity="0.72"
-            >
-              {labelMode === 'han' ? '漢 界' : 'HÁN GIỚI'}
-            </text>
-          </svg>
+          <XiangqiStaticBoardSvg svgUid={svgUid} labelMode={labelMode} />
 
           {/* LỚP 90 GIAO ĐIỂM TƯƠNG TÁC + 32 QUÂN CỜ GỖ TIỆN 3D ĐỎ – XANH */}
           {Array.from({ length: 90 }, (_, idx) => {
@@ -910,25 +917,25 @@ export function XiangqiBoardView({
             );
           })}
 
-          {/* LỚP HOẠT ẢNH LƯỚT QUÂN GỖ MƯỢT (SLIDE ~220ms) */}
+          {/* LỚP HOẠT ẢNH LƯỚT QUÂN GỖ MƯỢT THUẦN GPU translate3d (SLIDE ~220ms) */}
           {sliding &&
             (() => {
               const fromPt = idxToBoardPct(sliding.fromIdx);
               const toPt = idxToBoardPct(sliding.toIdx);
-              const curLeft = sliding.active ? toPt.leftPct : fromPt.leftPct;
-              const curTop = sliding.active ? toPt.topPct : fromPt.topPct;
+              const dxPct = sliding.active ? ((toPt.leftPct - fromPt.leftPct) / 10.6) * 100 : 0;
+              const dyPct = sliding.active ? ((toPt.topPct - fromPt.topPct) / 9.6) * 100 : 0;
               return (
                 <div
                   key={sliding.id}
                   aria-hidden="true"
-                  className="pointer-events-none absolute z-30 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+                  className="pointer-events-none absolute z-30 flex items-center justify-center will-change-transform"
                   style={{
-                    left: `${curLeft}%`,
-                    top: `${curTop}%`,
+                    left: `${fromPt.leftPct}%`,
+                    top: `${fromPt.topPct}%`,
                     width: '10.6%',
                     height: '9.6%',
-                    transition:
-                      'left 220ms cubic-bezier(0.22, 1, 0.36, 1), top 220ms cubic-bezier(0.22, 1, 0.36, 1)',
+                    transform: `translate3d(calc(-50% + ${dxPct}%), calc(-50% + ${dyPct}%), 0)`,
+                    transition: 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1)',
                   }}
                 >
                   <XiangqiPieceToken

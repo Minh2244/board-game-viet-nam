@@ -260,15 +260,16 @@ export function reduceCoCaNguaAction(
       state.lastMoveSummary = `💥 ${current.name} tiến ${move.diceValue} ô và ĐÁ bay ngựa ${HORSE_COLOR_CONFIG[move.kickedColor].nameVi} về chuồng!`;
       appendLog(state, state.lastMoveSummary, 'kick');
     } else if (reachedSafeDoor) {
-      state.lastMoveSummary = `★ ${current.name} đưa ngựa về tới Ô An Toàn (Ô Lên Bụt)!`;
+      state.lastMoveSummary = `★ ${current.name} đưa ngựa về tới Ô Cửa Lên Bụt ★!`;
       appendLog(state, state.lastMoveSummary, 'good');
     } else {
       state.lastMoveSummary = `${current.name} tiến ngựa ${move.diceValue} ô trên đường đua.`;
       appendLog(state, state.lastMoveSummary, 'info');
     }
   } else {
-    // ENTER_STAIRS hoặc CLIMB_STAIRS
+    // ENTER_STAIRS hoặc CLIMB_STAIRS (cho phép cả đi lên lẫn lùi xuống!)
     const fromSafeDoor = move.kind === 'ENTER_STAIRS';
+    const climbedDown = !fromSafeDoor && move.toStairStep < move.fromStairStep;
     horse.zone = 'HOME_STAIRS';
     horse.progress = -1;
     horse.stairStep = move.toStairStep;
@@ -282,8 +283,10 @@ export function reduceCoCaNguaAction(
     });
     state.lastMoveSummary = fromSafeDoor
       ? `🏆 ${current.name} đưa ngựa leo thẳng lên Bụt số ${move.toStairStep}!`
-      : `⬆️ ${current.name} đổi bụt từ bậc ${move.fromStairStep} lên Bụt số ${move.toStairStep}!`;
-    appendLog(state, state.lastMoveSummary, 'good');
+      : climbedDown
+        ? `⬇️ ${current.name} đổi bụt xuống từ bậc ${move.fromStairStep} về Bụt số ${move.toStairStep}.`
+        : `⬆️ ${current.name} đổi bụt từ bậc ${move.fromStairStep} lên Bụt số ${move.toStairStep}!`;
+    appendLog(state, state.lastMoveSummary, climbedDown ? 'info' : 'good');
   }
 
   state.legalMoves = [];

@@ -1,12 +1,14 @@
+import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
+
 /**
- * Âm thanh đánh Cờ Tướng gỗ truyền thống chuẩn phòng thu (Web Audio API + vang mặt bàn gỗ ConvolverNode):
+ * Âm thanh đánh Cờ Tướng gỗ truyền thống chuẩn phòng thu (Web Audio API + vang mặt bàn gỗ siêu nhẹ):
  * - Mặc định LUÔN BẬT (không bị tắt theo nút Nhạc nền!).
  * - Tái hiện tiếng quân gỗ tiện tròn đập xuống mặt bàn gỗ hoàng dương "CỘP!" đanh giòn, uy lực cực đã tai.
  */
 
 let xCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
-let reverbNode: ConvolverNode | null = null;
+let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
 
 function ensureAudio(): AudioContext | null {
@@ -30,21 +32,15 @@ function ensureAudio(): AudioContext | null {
     masterBus.connect(comp);
     comp.connect(xCtx.destination);
 
-    // Độ vang mặt bàn gỗ đặc 0.34s
-    const irLen = Math.floor(xCtx.sampleRate * 0.34);
-    const ir = xCtx.createBuffer(2, irLen, xCtx.sampleRate);
-    for (let ch = 0; ch < 2; ch += 1) {
-      const d = ir.getChannelData(ch);
-      for (let i = 0; i < irLen; i += 1) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLen, 2.8) * 0.25;
-      }
-    }
-    reverbNode = xCtx.createConvolver();
-    reverbNode.buffer = ir;
-    const wet = xCtx.createGain();
-    wet.gain.value = 0.28;
-    reverbNode.connect(wet);
-    wet.connect(masterBus);
+    // Độ vang mặt bàn gỗ đặc siêu nhẹ (thay ConvolverNode FFT ~20x nhẹ CPU trên ĐT)
+    reverbNode = createWarmRoomReverb(xCtx, {
+      delayA: 0.033,
+      delayB: 0.055,
+      feedback: 0.23,
+      lowpassHz: 2350,
+      wetGain: 0.23,
+      destination: masterBus,
+    });
 
     const nLen = Math.floor(xCtx.sampleRate * 0.45);
     noiseBuffer = xCtx.createBuffer(1, nLen, xCtx.sampleRate);
@@ -59,7 +55,7 @@ function ensureAudio(): AudioContext | null {
 function send(node: AudioNode, wet = true): void {
   if (!masterBus) return;
   node.connect(masterBus);
-  if (wet && reverbNode) node.connect(reverbNode);
+  if (wet && reverbNode) node.connect(reverbNode.input);
 }
 
 /** Tiếng đập quân Cờ Tướng gỗ "CỘP!" đanh giòn vang bàn gỗ cực thật */

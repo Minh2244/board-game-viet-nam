@@ -9,6 +9,8 @@
  * Âm lượng nền dịu êm để làm không khí thư giãn và tuyệt đối không lấn át âm thanh đánh cờ (SFX).
  */
 
+import { createWarmRoomReverb, type WarmRoomReverbBus } from './warmRoomReverb';
+
 export type GameBgmScene = 'co-ty-phu' | 'o-an-quan' | 'co-ca-ngua' | 'co-vua' | 'co-tuong';
 
 const F = {
@@ -36,12 +38,29 @@ const SCENE_BPM: Record<GameBgmScene, number> = {
 
 let bgmCtx: AudioContext | null = null;
 let bgmMaster: GainNode | null = null;
-let bgmReverb: ConvolverNode | null = null;
+let bgmReverb: WarmRoomReverbBus | null = null;
 let bgmNoise: AudioBuffer | null = null;
 let runtime: SceneRuntime | null = null;
+let visibilityHooked = false;
+
+function hookBgmVisibility(): void {
+  if (visibilityHooked || typeof document === 'undefined') return;
+  visibilityHooked = true;
+  document.addEventListener('visibilitychange', () => {
+    if (!bgmCtx) return;
+    if (document.hidden) {
+      if (bgmCtx.state === 'running') {
+        void bgmCtx.suspend().catch(() => {});
+      }
+    } else if (runtime && bgmCtx.state === 'suspended') {
+      void bgmCtx.resume().catch(() => {});
+    }
+  });
+}
 
 function ensureBgmAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
+  hookBgmVisibility();
   const Ctor =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -63,22 +82,15 @@ function ensureBgmAudio(): AudioContext | null {
     bgmMaster.connect(comp);
     comp.connect(bgmCtx.destination);
 
-    // Phòng vang dịu ấm (0.55s) giúp tiếng piano, đàn tranh & sáo tiêu mượt tai
-    const irLen = Math.floor(bgmCtx.sampleRate * 0.55);
-    const ir = bgmCtx.createBuffer(2, irLen, bgmCtx.sampleRate);
-    for (let ch = 0; ch < 2; ch += 1) {
-      const data = ir.getChannelData(ch);
-      for (let i = 0; i < irLen; i += 1) {
-        const decay = Math.pow(1 - i / irLen, 2.5);
-        data[i] = (Math.random() * 2 - 1) * decay * 0.24;
-      }
-    }
-    bgmReverb = bgmCtx.createConvolver();
-    bgmReverb.buffer = ir;
-    const wet = bgmCtx.createGain();
-    wet.gain.value = 0.34;
-    bgmReverb.connect(wet);
-    wet.connect(bgmMaster);
+    // Phòng vang gỗ ấm siêu nhẹ (Dual-Tap Delay + Lowpass ~20x nhẹ hơn ConvolverNode FFT trên ĐT!)
+    bgmReverb = createWarmRoomReverb(bgmCtx, {
+      delayA: 0.053,
+      delayB: 0.089,
+      feedback: 0.26,
+      lowpassHz: 2100,
+      wetGain: 0.25,
+      destination: bgmMaster,
+    });
 
     const nLen = Math.floor(bgmCtx.sampleRate * 0.3);
     bgmNoise = bgmCtx.createBuffer(1, nLen, bgmCtx.sampleRate);
@@ -91,7 +103,7 @@ function ensureBgmAudio(): AudioContext | null {
 function connectOut(node: AudioNode, useReverb = true): void {
   if (!bgmMaster) return;
   node.connect(bgmMaster);
-  if (useReverb && bgmReverb) node.connect(bgmReverb);
+  if (useReverb && bgmReverb) node.connect(bgmReverb.input);
 }
 
 /** Phím Felt Piano mềm ấm (dùng cho Cờ Vua) */
@@ -453,10 +465,10 @@ function scheduleSceneStep(ctx: AudioContext, scene: GameBgmScene, step: number,
 function pumpGameBgm(): void {
   if (!runtime || !bgmCtx || bgmCtx.state !== 'running') return;
   const stepSec = 60 / SCENE_BPM[runtime.scene] / 4;
-  if (runtime.nextTime < bgmCtx.currentTime - 0.12) {
+  if (runtime.nextTime < bgmCtx.currentTime - 0.14) {
     runtime.nextTime = bgmCtx.currentTime + 0.04;
   }
-  while (runtime.nextTime < bgmCtx.currentTime + 0.16) {
+  while (runtime.nextTime < bgmCtx.currentTime + 0.24) {
     scheduleSceneStep(bgmCtx, runtime.scene, runtime.step, runtime.nextTime);
     runtime.nextTime += stepSec;
     runtime.step = (runtime.step + 1) % 64;
@@ -491,7 +503,7 @@ export const gameBgmEngine = {
         bgmMaster.gain.linearRampToValueAtTime(0.42, ctx.currentTime + 0.45);
       }
       pumpGameBgm();
-      runtime.timerId = setInterval(pumpGameBgm, 30);
+      runtime.timerId = setInterval(pumpGameBgm, 75);
     };
 
     if (ctx.state === 'suspended') {
@@ -525,6 +537,9 @@ export const gameBgmEngine = {
       }
       bgmMaster = null;
       bgmReverb = null;
+    }
+    if (bgmCtx && bgmCtx.state === 'running') {
+      void bgmCtx.suspend().catch(() => {});
     }
   },
 };

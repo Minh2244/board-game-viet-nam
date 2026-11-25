@@ -1,8 +1,10 @@
+import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
+
 // Hiệu ứng âm thanh Cờ Cá Ngựa (mặc định luôn bật SFX, không bị tắt theo nút Nhạc nền)
 
 let hCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
-let reverbNode: ConvolverNode | null = null;
+let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
 
 function ensureAudio(): AudioContext | null {
@@ -26,22 +28,15 @@ function ensureAudio(): AudioContext | null {
     masterBus.connect(comp);
     comp.connect(hCtx.destination);
 
-    // Độ vang phòng gỗ ấm (0.34s stereo) cho cảm giác bàn cờ thật sống động
-    const irLen = Math.floor(hCtx.sampleRate * 0.34);
-    const ir = hCtx.createBuffer(2, irLen, hCtx.sampleRate);
-    for (let ch = 0; ch < 2; ch += 1) {
-      const data = ir.getChannelData(ch);
-      for (let i = 0; i < irLen; i += 1) {
-        const decay = Math.pow(1 - i / irLen, 2.7);
-        data[i] = (Math.random() * 2 - 1) * decay * 0.26;
-      }
-    }
-    reverbNode = hCtx.createConvolver();
-    reverbNode.buffer = ir;
-    const revGain = hCtx.createGain();
-    revGain.gain.value = 0.22;
-    reverbNode.connect(revGain);
-    revGain.connect(masterBus);
+    // Vang phòng gỗ ấm siêu nhẹ (thay ConvolverNode FFT ~20x nhẹ CPU trên ĐT)
+    reverbNode = createWarmRoomReverb(hCtx, {
+      delayA: 0.034,
+      delayB: 0.056,
+      feedback: 0.22,
+      lowpassHz: 2500,
+      wetGain: 0.19,
+      destination: masterBus,
+    });
 
     const nLen = Math.floor(hCtx.sampleRate * 1.1);
     noiseBuffer = hCtx.createBuffer(1, nLen, hCtx.sampleRate);
@@ -61,7 +56,7 @@ function sendOut(node: AudioNode, wet = true): void {
   if (!masterBus) return;
   node.connect(masterBus);
   if (wet && reverbNode) {
-    node.connect(reverbNode);
+    node.connect(reverbNode.input);
   }
 }
 

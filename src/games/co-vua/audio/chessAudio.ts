@@ -1,12 +1,14 @@
+import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
+
 /**
- * Âm thanh đánh Cờ Vua Cổ Điển chuẩn phòng thu (Web Audio API + vang phòng gỗ ConvolverNode):
+ * Âm thanh đánh Cờ Vua Cổ Điển chuẩn phòng thu (Web Audio API + vang phòng gỗ ấm siêu nhẹ):
  * - Mặc định LUÔN BẬT (không bị tắt theo nút Nhạc nền!).
  * - Mô phỏng quân Staunton gỗ đặc chạm mặt bàn gỗ óc chó nhiều lớp (body thud + wood resonance + transient click).
  */
 
 let cCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
-let reverbNode: ConvolverNode | null = null;
+let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
 
 function ensureAudio(): AudioContext | null {
@@ -30,21 +32,15 @@ function ensureAudio(): AudioContext | null {
     masterBus.connect(comp);
     comp.connect(cCtx.destination);
 
-    // Phòng gỗ cổ điển vang ấm 0.28s
-    const irLen = Math.floor(cCtx.sampleRate * 0.28);
-    const ir = cCtx.createBuffer(2, irLen, cCtx.sampleRate);
-    for (let ch = 0; ch < 2; ch += 1) {
-      const d = ir.getChannelData(ch);
-      for (let i = 0; i < irLen; i += 1) {
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / irLen, 3.1) * 0.22;
-      }
-    }
-    reverbNode = cCtx.createConvolver();
-    reverbNode.buffer = ir;
-    const wet = cCtx.createGain();
-    wet.gain.value = 0.24;
-    reverbNode.connect(wet);
-    wet.connect(masterBus);
+    // Phòng gỗ cổ điển vang ấm siêu nhẹ (thay ConvolverNode FFT ~20x nhẹ CPU trên ĐT)
+    reverbNode = createWarmRoomReverb(cCtx, {
+      delayA: 0.029,
+      delayB: 0.047,
+      feedback: 0.2,
+      lowpassHz: 2200,
+      wetGain: 0.2,
+      destination: masterBus,
+    });
 
     const nLen = Math.floor(cCtx.sampleRate * 0.45);
     noiseBuffer = cCtx.createBuffer(1, nLen, cCtx.sampleRate);
@@ -59,7 +55,7 @@ function ensureAudio(): AudioContext | null {
 function send(node: AudioNode, wet = true): void {
   if (!masterBus) return;
   node.connect(masterBus);
-  if (wet && reverbNode) node.connect(reverbNode);
+  if (wet && reverbNode) node.connect(reverbNode.input);
 }
 
 /** Tiếng đặt quân gỗ Staunton nặng chắc tay lên mặt bàn gỗ */

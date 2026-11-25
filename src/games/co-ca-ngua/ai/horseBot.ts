@@ -61,7 +61,7 @@ function getHighestEmptyStairStep(horses: readonly HorsePiece[], color: HorseCol
 
 /**
  * Đếm số quân ngựa đối phương có khả năng đá được vị trí `targetTrackIndex` ngay trong 1 lượt gieo (1..6).
- * Nếu vị trí nằm trên 1 trong 4 Ô An Toàn (Ô Lên Bụt) thì luôn bất khả xâm phạm -> trả về 0!
+ * Lưu ý: Kể cả 4 Ô Cửa Lên Bụt ★ vẫn có thể bị đá bình thường khi chưa leo lên bậc bụt 1–6!
  */
 function countThreateningEnemies(
   horses: readonly HorsePiece[],
@@ -69,8 +69,6 @@ function countThreateningEnemies(
   targetTrackIndex: number,
   ignoreHorseId?: string | null,
 ): number {
-  if (SAFE_DOOR_TRACK_INDICES.has(targetTrackIndex)) return 0;
-
   let threats = 0;
   for (const enemy of horses) {
     if (enemy.color === myColor || enemy.zone !== 'TRACK' || enemy.id === ignoreHorseId) continue;
@@ -160,11 +158,21 @@ function evaluateMoveScore(
     return score;
   }
 
-  // 3. ĐỔI BỤT TRÊN CẦU THANG (CLIMB_STAIRS: fromStairStep -> toStairStep)
+  // 3. ĐỔI BỤT TRÊN CẦU THANG (CLIMB_STAIRS: lên hoặc xuống)
   if (move.kind === 'CLIMB_STAIRS') {
     const fromStep = move.fromStairStep;
     const toStep = move.toStairStep;
     const jumpGain = toStep - fromStep;
+
+    if (jumpGain < 0) {
+      // Lùi bụt xuống bậc thấp hơn: tránh tự phá thế thắng, chỉ chọn khi bắt buộc hoặc né nước đi chết ngoài đường đua!
+      if (fromStep >= 3 && toStep <= 2) {
+        score -= 480 + (fromStep - toStep) * 65;
+      } else {
+        score -= 220 + (fromStep - toStep) * 40;
+      }
+      return score;
+    }
 
     if (fromStep <= 2 && toStep >= 3) {
       // Thoát khỏi bậc kẹt 1–2 lên thẳng khu chiến thắng 3–6 -> cực kỳ giá trị!
@@ -221,25 +229,21 @@ function evaluateMoveScore(
   // Cơ bản: ưu tiên đẩy ngựa chạy xa hơn về gần Cửa Chuồng
   score += move.diceValue * 16 + move.toProgress * 3.8;
 
-  // Vào đúng Ô An Toàn (Ô Lên Bụt của mình, progress = 51)!
+  // Vào đúng Ô Cửa Lên Bụt ★ của mình (progress = 51)! (Lưu ý: vẫn có thể bị đá nếu chưa lên bậc 1–6)
   if (move.toProgress === SAFE_DOOR_PROGRESS) {
-    score += 590;
-    // Nếu còn ít ngựa trên bậc 3..6 thì vào cửa càng quý
+    score += 560;
     if (stairHorses.length >= 2) score += 90;
-  } else if (SAFE_DOOR_TRACK_INDICES.has(toIdx)) {
-    // Đứng vào Ô An Toàn của đối phương -> vừa bất tử vừa chặn họ lên bụt!
-    score += isHard ? 280 : 190;
-    if (isHard) {
-      const blockingCloseEnemy = horses.some(
-        (h) =>
-          h.color !== myColor &&
-          h.zone === 'TRACK' &&
-          HORSE_COLOR_CONFIG[h.color].safeDoorTrackIndex === toIdx &&
-          h.progress >= 44 &&
-          h.progress < SAFE_DOOR_PROGRESS,
-      );
-      if (blockingCloseEnemy) score += 170;
-    }
+  } else if (SAFE_DOOR_TRACK_INDICES.has(toIdx) && isHard) {
+    // Chặn tạm cửa lên bụt của địch (chỉ có ích nhỏ vì địch vẫn đá được mình nếu đổ đúng số!)
+    const blockingCloseEnemy = horses.some(
+      (h) =>
+        h.color !== myColor &&
+        h.zone === 'TRACK' &&
+        HORSE_COLOR_CONFIG[h.color].safeDoorTrackIndex === toIdx &&
+        h.progress >= 44 &&
+        h.progress < SAFE_DOOR_PROGRESS,
+    );
+    if (blockingCloseEnemy) score += 45;
   }
 
   // Đá bay ngựa đối phương!
@@ -317,7 +321,12 @@ export function computeHorseBotMove(
   if (winningMove) return winningMove;
 
   if (difficulty === 'easy' && Math.random() < 0.45) {
-    return uniqueMoves[Math.floor(Math.random() * uniqueMoves.length)];
+    // Kể cả Máy Dễ cũng tránh lùi bụt vô nghĩa khi vẫn còn nước tiến hợp lệ khác
+    const nonRetreat = uniqueMoves.filter(
+      (m) => !(m.kind === 'CLIMB_STAIRS' && m.toStairStep < m.fromStairStep),
+    );
+    const pool = nonRetreat.length > 0 ? nonRetreat : uniqueMoves;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   const jitter = difficulty === 'easy' ? 180 : difficulty === 'medium' ? 28 : 4;
@@ -363,18 +372,15 @@ export function computeHorseHint(state: CoCaNguaState): HorseHintResult | null {
   } else if (bestMove.kind === 'ENTER_STAIRS') {
     explanationVi =
       bestMove.toStairStep >= 3
-        ? `Cho ngựa từ Ô An Toàn ★ leo thẳng lên Bụt số ${bestMove.toStairStep} (nằm trong cụm thắng 3–6)!`
-        : `Cho ngựa vào Bụt số ${bestMove.toStairStep} để mở trống Ô An Toàn ★ cho quân kế tiếp.`;
+        ? `Cho ngựa từ Cửa ★ leo thẳng lên Bụt số ${bestMove.toStairStep} (an toàn tuyệt đối trong cụm thắng 3–6)!`
+        : `Cho ngựa vào Bụt số ${bestMove.toStairStep} để lên khu an toàn và mở trống Cửa ★ cho quân kế tiếp.`;
   } else if (bestMove.kind === 'CLIMB_STAIRS') {
-    explanationVi = `Đổi bụt từ bậc ${bestMove.fromStairStep} lên Bụt số ${bestMove.toStairStep} để tiến sát thắng lợi và mở chỗ cho quân sau!`;
+    explanationVi =
+      bestMove.toStairStep < bestMove.fromStairStep
+        ? `Đổi bụt lùi từ bậc ${bestMove.fromStairStep} xuống Bụt số ${bestMove.toStairStep} để giữ an toàn cho quân ngoài đường đua!`
+        : `Đổi bụt từ bậc ${bestMove.fromStairStep} lên Bụt số ${bestMove.toStairStep} để tiến sát thắng lợi và mở chỗ cho quân sau!`;
   } else if (bestMove.kind === 'ADVANCE_TRACK' && bestMove.toProgress === SAFE_DOOR_PROGRESS) {
-    explanationVi = 'Đưa ngựa dừng đúng Ô An Toàn ★ (Ô Lên Bụt) — không thể bị đá và lượt sau được leo bụt!';
-  } else if (
-    bestMove.kind === 'ADVANCE_TRACK' &&
-    bestMove.toTrackIndex !== null &&
-    SAFE_DOOR_TRACK_INDICES.has(bestMove.toTrackIndex)
-  ) {
-    explanationVi = 'Dừng tại Ô An Toàn ★ để bất khả xâm phạm và chặn đường đối phương lên bụt!';
+    explanationVi = 'Đưa ngựa dừng đúng Ô Cửa Lên Bụt ★ để lượt sau leo bụt (lưu ý vẫn có thể bị đá nếu chưa lên bụt)!';
   } else if (bestMove.kind === 'DEPLOY') {
     explanationVi = `Tận dụng mặt ${bestMove.diceValue} xuất thêm ngựa ra đường đua (và được thêm lượt tung)!`;
   } else if (

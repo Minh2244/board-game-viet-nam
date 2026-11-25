@@ -3,7 +3,6 @@ import {
   HORSE_COLOR_CONFIG,
   progressToTrackIndex,
   SAFE_DOOR_PROGRESS,
-  SAFE_DOOR_TRACK_INDICES,
   WINNING_STAIR_STEPS,
 } from './boardGeometry';
 import type {
@@ -34,13 +33,17 @@ export function shouldBoostDeployDice(horses: readonly HorsePiece[], color: Hors
 }
 
 /**
- * Tung xúc xắc thông minh cho Cờ Cá Ngựa:
- * - Khi chưa có ngựa ra đường đua (đang cần 1 hoặc 6 để xuất chuồng): tăng tỉ lệ ra {1, 6} lên 60% (30% ra 1, 30% ra 6; 40% chia đều cho 2, 3, 4, 5) để vào trận mượt mà, không bị kẹt chuồng quá lâu.
- * - Khi đã có ngựa chạy trên đường đua: ngẫu nhiên đều 100% (1..6 mỗi mặt 1/6).
+ * Tung xúc xắc thông minh cho Cờ Cá Ngựa (áp dụng công bằng chung cho cả bàn để đẩy tiến độ mượt mà, giữ 100% luật 4 ngựa 3–4–5–6):
+ * 1. Khi chưa có ngựa ra đường đua (đang cần 1 hoặc 6 để xuất chuồng): tỉ lệ ra {1, 6} = 60% (30% ra 1, 30% ra 6).
+ * 2. Khi mới có 1 ngựa ngoài đường đua & vẫn còn >= 2 ngựa trong chuồng: tăng nhẹ {1, 6} lên ~44% để ra quân đều tay hơn.
+ * 3. Khi có ngựa áp sát Cửa Lên Bụt ★ (cách 1..6 ô), đang đứng tại Cửa ★ chờ leo bậc thắng 3–6 trống,
+ *    hoặc kẹt bậc 1–2 cần đổi lên bậc 3–6 trống: tăng nhẹ trọng số (×1.65) cho các mặt giúp về cửa / lên bậc thắng!
  */
 export function rollSmartHorseDice(state: CoCaNguaState): number {
   const current = state.players[state.currentPlayerIndex];
-  if (current && shouldBoostDeployDice(state.horses, current.color)) {
+  if (!current) return cryptoRandomInt(1, 6);
+
+  if (shouldBoostDeployDice(state.horses, current.color)) {
     const r = cryptoRandomInt(1, 100);
     if (r <= 30) return 1;
     if (r <= 60) return 6;
@@ -49,7 +52,46 @@ export function rollSmartHorseDice(state: CoCaNguaState): number {
     if (r <= 90) return 4;
     return 5;
   }
-  return cryptoRandomInt(1, 6);
+
+  const own = state.horses.filter((h) => h.color === current.color);
+  const stableCount = own.filter((h) => h.zone === 'STABLE').length;
+  const trackCount = own.filter((h) => h.zone === 'TRACK').length;
+
+  const weights = [100, 100, 100, 100, 100, 100];
+  if (trackCount === 1 && stableCount >= 2) {
+    // 157*2 / (157*2 + 100*4) ≈ 44% cho {1, 6}
+    weights[0] = 157;
+    weights[5] = 157;
+  }
+
+  const hasDoorOrStairGoal = own.some(
+    (h) =>
+      (h.zone === 'TRACK' && h.progress >= SAFE_DOOR_PROGRESS - 6) ||
+      (h.zone === 'HOME_STAIRS' && h.stairStep <= 2),
+  );
+
+  if (hasDoorOrStairGoal) {
+    for (let face = 1; face <= 6; face += 1) {
+      const legal = computeLegalHorseMoves(state.horses, current.color, face);
+      const hitsGoal = legal.some(
+        (m) =>
+          (m.kind === 'ADVANCE_TRACK' && m.toProgress === SAFE_DOOR_PROGRESS) ||
+          (m.kind === 'ENTER_STAIRS' && m.toStairStep >= 3) ||
+          (m.kind === 'CLIMB_STAIRS' && m.fromStairStep <= 2 && m.toStairStep >= 3),
+      );
+      if (hitsGoal) {
+        weights[face - 1] = Math.round(weights[face - 1] * 1.65);
+      }
+    }
+  }
+
+  const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+  let pick = cryptoRandomInt(1, totalWeight);
+  for (let i = 0; i < 6; i += 1) {
+    pick -= weights[i];
+    if (pick <= 0) return i + 1;
+  }
+  return 6;
 }
 
 /** Tìm quân ngựa đang đứng tại 1 ô cụ thể trên vòng đường đua 52 ô (mỗi ô tối đa 1 quân!) */
@@ -112,11 +154,11 @@ export function countWinStairHorses(horses: readonly HorsePiece[], color: HorseC
  * 2. TRACK (progress < 51):
  *    - Cấm đi lố cửa chuồng (progress + dice > 51).
  *    - Cấm nhảy qua BẤT KỲ quân ngựa nào ở các ô trung gian 1..dice-1 (cả cùng màu lẫn khác màu).
- *    - Ô đích: cấm nếu có quân cùng màu; cấm nếu có quân địch đang đứng trên 4 Ô An Toàn (Ô Lên Bụt {12, 25, 38, 51}); đá quân địch nếu ô đích không phải ô an toàn.
- * 3. TRACK (progress === 51 — đang đứng tại Ô Lên Bụt):
+ *    - Ô đích: cấm nếu có quân cùng màu; mọi ô trên vòng đua 52 ô (KỂ CẢ 4 Ô ★ Cửa Lên Bụt {12, 25, 38, 51}) đều ĐÁ ĐƯỢC quân địch! Chỉ bậc bụt 1..6 trong chuồng đích mới bất khả xâm phạm.
+ * 3. TRACK (progress === 51 — đang đứng tại Ô ★ Cửa Lên Bụt):
  *    - Gieo k (1..6) -> nhảy thẳng lên bậc k nếu toàn bộ bậc 1..k đều trống (cấm nhảy qua quân mình!).
- * 4. HOME_STAIRS (stairStep = a ∈ [1..5]):
- *    - Đổi bụt theo ĐÚNG SỐ XÚC XẮC: chỉ được đi khi diceValue = b > a và toàn bộ bậc (a+1)..b đều trống!
+ * 4. HOME_STAIRS (stairStep = a ∈ [1..6]):
+ *    - Đổi bụt theo ĐÚNG SỐ XÚC XẮC (lên HOẶC xuống!): đi được khi diceValue = b ≠ a và toàn bộ bậc nằm giữa & bậc b đều trống!
  */
 export function computeLegalHorseMoves(
   horses: readonly HorsePiece[],
@@ -212,10 +254,9 @@ export function computeLegalHorseMoves(
       const occupant = getHorseAtTrackIndex(horses, destTrackIndex);
 
       if (occupant) {
-        // Cấm đứng chung ô với quân cùng màu
+        // Cấm đứng chung ô với quân cùng màu; mọi ô trên vòng đua 52 ô (KỂ CẢ 4 Ô ★ Cửa Lên Bụt) đều ĐÁ ĐƯỢC quân địch!
+        // Chỉ khi quân đã leo lên bậc bụt 1–6 (HOME_STAIRS) mới bất khả xâm phạm.
         if (occupant.color === color) continue;
-        // Cấm đá hoặc chiếm ô nếu quân đối phương đang đứng trên 1 trong 4 Ô An Toàn (Ô Lên Bụt)
-        if (SAFE_DOOR_TRACK_INDICES.has(destTrackIndex)) continue;
       }
 
       moves.push({
@@ -236,12 +277,17 @@ export function computeLegalHorseMoves(
       continue;
     }
 
-    // 3. NGỰA ĐANG TRÊN CẦU THANG BỤT (HOME_STAIRS: bậc 1..5) -> ĐỔI BỤT THEO ĐÚNG SỐ XÚC XẮC (b > a)
-    if (horse.zone === 'HOME_STAIRS' && horse.stairStep >= 1 && horse.stairStep < 6) {
-      if (diceValue <= horse.stairStep) continue;
-      // Cấm nhảy qua ngựa cùng màu trên các bậc (a+1 .. b) và cấm đứng chung bậc b
+    // 3. NGỰA ĐANG TRÊN CẦU THANG BỤT (HOME_STAIRS: bậc 1..6) -> ĐỔI BỤT LÊN HOẶC XUỐNG THEO ĐÚNG SỐ XÚC XẮC (b ≠ a)
+    if (horse.zone === 'HOME_STAIRS' && horse.stairStep >= 1 && horse.stairStep <= 6) {
+      if (diceValue === horse.stairStep) continue;
+      const dir = diceValue > horse.stairStep ? 1 : -1;
+      // Cấm nhảy qua ngựa cùng màu trên các bậc nằm giữa và cấm đứng chung bậc đích!
       let blocked = false;
-      for (let step = horse.stairStep + 1; step <= diceValue; step += 1) {
+      for (
+        let step = horse.stairStep + dir;
+        dir > 0 ? step <= diceValue : step >= diceValue;
+        step += dir
+      ) {
         if (getHorseAtStairStep(horses, color, step)) {
           blocked = true;
           break;

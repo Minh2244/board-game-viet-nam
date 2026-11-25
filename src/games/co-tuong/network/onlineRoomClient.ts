@@ -1,4 +1,12 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
+import { AblyFastLane } from '@/shared/network/ablyFastLane';
+import {
+  createAdaptiveCheckpointScheduler,
+  getAdaptiveBackupPollIntervalMs,
+  hasAllConnectedPeersRtcOpen,
+  postWithRetry,
+  type AdaptiveCheckpointScheduler,
+} from '@/shared/network/onlineReliability';
 import { isFastLaneDisabled } from '@/shared/network/onlineTransportConfig';
 import { createInitialXiangqiState, reduceXiangqiAction } from '../engine/reducer';
 import type { XiangqiAction, XiangqiColor, XiangqiState } from '../engine/types';
@@ -237,9 +245,13 @@ export class XiangqiOnlineClient {
   private joinResolved = false;
   private visibilityHandler: (() => void) | null = null;
   private pushChain: Promise<void> = Promise.resolve();
+  private actionPushChain: Promise<void> = Promise.resolve();
   private broadcastChan: BroadcastChannel | null = null;
+  private ablyLane: AblyFastLane | null = null;
+  private ablyConnected = false;
   private rtcPeers = new Map<string, PeerChannelState>();
-  private checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+  private checkpointScheduler: AdaptiveCheckpointScheduler | null = null;
+  private joinPollAttempts = 0;
 
   constructor(options: {
     roomCode: string;
@@ -421,29 +433,33 @@ export class XiangqiOnlineClient {
     return { ...snap, matchState: state, matchVersion: ver };
   }
 
-  private hasOpenRtcPeer(): boolean {
-    if (isFastLaneDisabled()) return false;
-    for (const peer of this.rtcPeers.values()) {
-      if (peer.dc?.readyState === 'open') return true;
-    }
-    return false;
+  private hasAllPeersRtcOpen(): boolean {
+    if (!this.snapshot) return false;
+    const remoteTokens = this.snapshot.humans
+      .filter((h) => h.playerToken !== this.playerToken && h.connected)
+      .map((h) => h.playerToken);
+    return hasAllConnectedPeersRtcOpen(remoteTokens, this.rtcPeers, isFastLaneDisabled());
   }
 
   private scheduleCheckpoint(delayMs = 1200): void {
     if (this.destroyed || !this.snapshot) return;
-    if (this.checkpointTimer !== null) clearTimeout(this.checkpointTimer);
-    this.checkpointTimer = setTimeout(() => {
-      this.checkpointTimer = null;
-      if (this.destroyed || !this.snapshot) return;
-      const snapClone = structuredClone(this.snapshot);
-      void apiPostRoom({
-        action: 'checkpoint',
-        game: GAME_NAMESPACE,
-        roomCode: this.roomCode,
-        senderToken: this.playerToken,
-        snapshot: snapClone,
-      }).catch(() => {});
-    }, delayMs);
+    if (!this.checkpointScheduler) {
+      this.checkpointScheduler = createAdaptiveCheckpointScheduler({
+        isDestroyed: () => this.destroyed,
+        onFlush: () => {
+          if (this.destroyed || !this.snapshot) return;
+          const snapClone = structuredClone(this.snapshot);
+          void apiPostRoom({
+            action: 'checkpoint',
+            game: GAME_NAMESPACE,
+            roomCode: this.roomCode,
+            senderToken: this.playerToken,
+            snapshot: snapClone,
+          }).catch(() => {});
+        },
+      });
+    }
+    this.checkpointScheduler.schedule(delayMs);
   }
 
   public swapColors(): void {
@@ -502,8 +518,8 @@ export class XiangqiOnlineClient {
       updatedAt: Date.now(),
     };
 
-    // Chỉ gửi gói Delta ~130 byte qua đường tắt pushEventOnlyFast (~3ms) + checkpoint F5 chạy ngầm!
-    this.pushFastEventOnly({
+    // Gửi gói Delta ~130 byte tức thì qua Ably/P2P + hàng đợi FIFO có Retry lên Upstash Lua nguyên tử + checkpoint F5!
+    this.pushActionCommitReliable({
       msgId: generateRandomId('msg'),
       senderToken: this.playerToken,
       type: 'ACTION_COMMIT',
@@ -556,9 +572,14 @@ export class XiangqiOnlineClient {
     if (this.pollTimer !== null) clearTimeout(this.pollTimer);
     if (this.heartbeatTimer !== null) clearInterval(this.heartbeatTimer);
     if (this.graceCheckTimer !== null) clearInterval(this.graceCheckTimer);
-    if (this.checkpointTimer !== null) {
-      clearTimeout(this.checkpointTimer);
-      this.checkpointTimer = null;
+    if (this.checkpointScheduler) {
+      this.checkpointScheduler.cancel();
+      this.checkpointScheduler = null;
+    }
+    if (this.ablyLane) {
+      this.ablyLane.destroy();
+      this.ablyLane = null;
+      this.ablyConnected = false;
     }
     if (typeof document !== 'undefined' && this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
@@ -590,10 +611,12 @@ export class XiangqiOnlineClient {
   }
 
   private getAdaptivePollIntervalMs(): number {
-    if (!this.joinResolved) return 60;
-    if (typeof document !== 'undefined' && document.hidden) return 3600;
-    if (this.hasOpenRtcPeer()) return 2200;
-    return 25;
+    return getAdaptiveBackupPollIntervalMs({
+      joinResolved: this.joinResolved,
+      hidden: typeof document !== 'undefined' && document.hidden,
+      ablyConnected: this.ablyConnected,
+      allRtcOpen: this.hasAllPeersRtcOpen(),
+    });
   }
 
   private startSyncLoops(): void {
@@ -672,19 +695,28 @@ export class XiangqiOnlineClient {
     let hadError = false;
     try {
       const hidden = typeof document !== 'undefined' && document.hidden;
-      const useLongPoll = !hidden && !this.hasOpenRtcPeer();
-      const waitMs = !this.joinResolved
-        ? 1500
-        : useLongPoll
-          ? this.snapshot?.phase === 'PLAYING'
-            ? 3000
-            : 2500
-          : 0;
-      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, !this.joinResolved, waitMs);
+      const useLongPoll = !hidden && !this.ablyConnected && !this.hasAllPeersRtcOpen();
+      const requestFull = !this.joinResolved && this.joinPollAttempts % 4 === 0;
+      if (!this.joinResolved) this.joinPollAttempts += 1;
+      const waitMs = requestFull
+        ? 0
+        : !this.joinResolved
+          ? 1500
+          : useLongPoll
+            ? this.snapshot?.phase === 'PLAYING'
+              ? 3000
+              : 2500
+            : 0;
+      const { status, data } = await apiGetRoom(this.roomCode, this.lastSeq, requestFull, waitMs);
       if (this.destroyed) return;
       if (status === 404 || status === 410 || data.phase === 'DISSOLVED') {
+        const disEvt = Array.isArray(data.events)
+          ? data.events.find((r) => r.packet?.type === 'DISSOLVE_ROOM')?.packet
+          : undefined;
+        const customReason =
+          disEvt && disEvt.type === 'DISSOLVE_ROOM' && disEvt.reason ? disEvt.reason : undefined;
         clearPersistedXiangqiSession();
-        this.callbacks.onRoomClosed(data.message || 'Phòng Online đã đóng.');
+        this.callbacks.onRoomClosed(customReason || data.message || 'Phòng Online đã đóng.');
         this.destroy();
         return;
       }
@@ -795,7 +827,20 @@ export class XiangqiOnlineClient {
           return;
         }
         this.joinResolved = true;
-        this.snapshot = packet.snapshot;
+        if (
+          this.snapshot?.phase === 'PLAYING' &&
+          packet.snapshot.phase === 'PLAYING' &&
+          this.snapshot.matchState &&
+          packet.snapshot.matchVersion < this.snapshot.matchVersion
+        ) {
+          this.snapshot = {
+            ...packet.snapshot,
+            matchState: this.snapshot.matchState,
+            matchVersion: this.snapshot.matchVersion,
+          };
+        } else {
+          this.snapshot = packet.snapshot;
+        }
         this.callbacks.onStatusChange('READY', `Đã kết nối phòng #${this.roomCode}`);
         this.emitSnapshot();
         break;
@@ -888,6 +933,27 @@ export class XiangqiOnlineClient {
 
   private initFastLanes(): void {
     if (this.destroyed || isFastLaneDisabled()) return;
+    if (!this.ablyLane) {
+      this.ablyLane = new AblyFastLane({
+        game: GAME_NAMESPACE,
+        roomCode: this.roomCode,
+        clientId: this.playerToken,
+        onPacket: (raw) => {
+          if (this.destroyed) return;
+          const pkt = raw as unknown as WirePacket;
+          if (pkt && typeof pkt.msgId === 'string') {
+            this.handleIncomingPacket(pkt);
+          }
+        },
+        onAvailabilityChange: (available) => {
+          this.ablyConnected = available;
+          if (!available && !this.destroyed) {
+            this.scheduleNextPoll(25);
+          }
+        },
+      });
+      void this.ablyLane.start();
+    }
     if (!this.broadcastChan && typeof BroadcastChannel !== 'undefined') {
       try {
         this.broadcastChan = new BroadcastChannel(`bgvn_ct_fast_${this.roomCode}`);
@@ -1026,6 +1092,9 @@ export class XiangqiOnlineClient {
 
   private sendOverFastLanes(packet: WirePacket): void {
     if (this.destroyed) return;
+    if (this.ablyLane?.isAvailable()) {
+      this.ablyLane.publish(packet as unknown as Record<string, unknown>);
+    }
     try {
       this.broadcastChan?.postMessage(packet);
     } catch {
@@ -1044,20 +1113,28 @@ export class XiangqiOnlineClient {
     }
   }
 
-  private pushFastEventOnly(packet: WirePacket): void {
+  private pushActionCommitReliable(packet: WirePacket): void {
     if (this.destroyed) return;
     this.seenMsgIds.add(packet.msgId);
     this.sendOverFastLanes(packet);
-    void apiPostRoom({
-      action: 'push',
-      game: GAME_NAMESPACE,
-      roomCode: this.roomCode,
-      senderToken: this.playerToken,
-      packet,
-    })
-      .then(({ data }) => {
-        if (!this.destroyed && typeof data.seq === 'number' && data.seq === this.lastSeq + 1) {
-          this.lastSeq = data.seq;
+
+    this.actionPushChain = this.actionPushChain
+      .then(async () => {
+        if (this.destroyed) return;
+        const res = await postWithRetry(
+          () =>
+            apiPostRoom({
+              action: 'push',
+              game: GAME_NAMESPACE,
+              roomCode: this.roomCode,
+              senderToken: this.playerToken,
+              packet,
+            }),
+          () => this.destroyed,
+        );
+        if (!res || this.destroyed) return;
+        if (typeof res.data.seq === 'number' && res.data.seq === this.lastSeq + 1) {
+          this.lastSeq = res.data.seq;
         }
       })
       .catch(() => {});

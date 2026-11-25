@@ -1,5 +1,11 @@
 import type { CardDef } from '../engine/types';
 
+/**
+ * Bộ 16 lá CƠ HỘI — cân bằng 50/50 nhất quán:
+ * - Đúng 1 lá Vô Tù (`chance_01`) · 1 lá Miễn Vào Tù (`chance_02`)
+ * - 7 lá Tích cực (di chuyển, bay Sân Bay, thưởng đầu tư, thu tiền đối thủ)
+ * - 7 lá Thử thách (lùi 3 ô, chi phí kinh doanh, cải tạo mặt bằng, chiêu đãi đối tác)
+ */
 export const CHANCE_CARDS: readonly CardDef[] = [
   {
     id: 'chance_01',
@@ -41,7 +47,7 @@ export const CHANCE_CARDS: readonly CardDef[] = [
     deck: 'CHANCE',
     title: 'Tiến Về Sài Gòn',
     description: 'Đi taxi thẳng tiến tới đất vàng Sài Gòn. Nếu đi ngang qua ô Khởi Hành sẽ nhận 3.000.000 đ!',
-    effect: { type: 'MOVE_TO_TILE', targetIndex: 50 },
+    effect: { type: 'MOVE_TO_TILE', targetIndex: 51 },
   },
   {
     id: 'chance_07',
@@ -54,8 +60,8 @@ export const CHANCE_CARDS: readonly CardDef[] = [
     id: 'chance_08',
     deck: 'CHANCE',
     title: 'Gọi Vốn Shark Tank',
-    description: 'Dự án khởi nghiệp được các Shark chốt deal khủng: Nhận 2.500.000 đ vốn đầu tư!',
-    effect: { type: 'CASH_DELTA', amount: 2_500_000 },
+    description: 'Dự án khởi nghiệp được các Shark chốt deal khủng: Nhận 2.000.000 đ vốn đầu tư!',
+    effect: { type: 'CASH_DELTA', amount: 2_000_000 },
   },
   {
     id: 'chance_09',
@@ -67,16 +73,16 @@ export const CHANCE_CARDS: readonly CardDef[] = [
   {
     id: 'chance_10',
     deck: 'CHANCE',
-    title: 'Bốc Thăm Trúng SH',
-    description: 'Bốc thăm may mắn ở siêu thị trúng xe tay ga: Bán xe nhận ngay 1.200.000 đ!',
-    effect: { type: 'CASH_DELTA', amount: 1_200_000 },
+    title: 'Hỏng Máy Lạnh Cửa Hàng',
+    description: 'Khách sạn & cửa hàng bị than phiền máy lạnh hư giữa trưa hè: Chi sửa chữa 500.000 đ.',
+    effect: { type: 'CASH_DELTA', amount: -500_000 },
   },
   {
     id: 'chance_11',
     deck: 'CHANCE',
-    title: 'Hoàn Thuế Thu Nhập',
-    description: 'Quyết toán thuế cuối năm phát hiện nộp thừa: Nhận lại 800.000 đ từ Ngân hàng!',
-    effect: { type: 'CASH_DELTA', amount: 800_000 },
+    title: 'Quỹ Vì Cộng Đồng',
+    description: 'Chung tay góp sức xây cầu nông thôn và nhà tình nghĩa: Ủng hộ 600.000 đ.',
+    effect: { type: 'CASH_DELTA', amount: -600_000 },
   },
   {
     id: 'chance_12',
@@ -88,33 +94,39 @@ export const CHANCE_CARDS: readonly CardDef[] = [
   {
     id: 'chance_13',
     deck: 'CHANCE',
-    title: 'Bảo Hiểm Bồi Thường',
-    description: 'Hợp đồng bảo hiểm tài sản đáo hạn: Nhận chi trả quyền lợi 1.000.000 đ!',
-    effect: { type: 'CASH_DELTA', amount: 1_000_000 },
+    title: 'Cấp Đổi Giấy Phép & Bảo Trì',
+    description: 'Kiểm định phòng cháy & cấp lại hồ sơ nhà đất: Nộp 150.000 đ mỗi nhà Cấp 1–4 và 500.000 đ mỗi Biệt Thự.',
+    effect: { type: 'REPAIR_BUILDINGS', houseFee: 150_000, villaFee: 500_000 },
   },
   {
     id: 'chance_14',
     deck: 'CHANCE',
-    title: 'Nhặt Được Của Rơi',
-    description: 'Nhặt được ví tiền trả lại người đánh mất: Được thưởng tuyên dương 500.000 đ!',
-    effect: { type: 'CASH_DELTA', amount: 500_000 },
+    title: 'Khao Tiệc Đối Tác',
+    description: 'Khai trương mở rộng kinh doanh, mời bạn bè một chầu thả ga: Mời mỗi người chơi khác 300.000 đ!',
+    effect: { type: 'PAY_EACH_OTHER', amountPerPlayer: 300_000 },
   },
   {
     id: 'chance_15',
     deck: 'CHANCE',
-    title: 'Trợ Giá Xăng Dầu',
-    description: 'Nhận gói hỗ trợ kích cầu vận tải du lịch: Cộng thêm 600.000 đ!',
-    effect: { type: 'CASH_DELTA', amount: 600_000 },
+    title: 'Bị Móc Túi Tại Bến Xe',
+    description: 'Đi công tác sơ ý bị kẻ gian móc ví nơi đông đúc: Mất trắng 800.000 đ.',
+    effect: { type: 'CASH_DELTA', amount: -800_000 },
   },
   {
     id: 'chance_16',
     deck: 'CHANCE',
-    title: 'Tống Giam Khẩn Cấp',
-    description: 'Bị cơ quan điều tra triệu tập vì trốn thuế: Đi thẳng vào Nhà Tù!',
-    effect: { type: 'GO_TO_JAIL' },
+    title: 'Chậm Kê Khai Thuế',
+    description: 'Kế toán nộp trễ tờ khai thuế môn bài: Nộp phạt hành chính 500.000 đ vào kho bạc.',
+    effect: { type: 'CASH_DELTA', amount: -500_000 },
   },
 ];
 
+/**
+ * Bộ 16 lá KHÍ VẬN — cân bằng 50/50 nhất quán:
+ * - Đúng 1 lá Vô Tù (`fate_01`) · 1 lá Miễn Vào Tù (`fate_02`)
+ * - 7 lá Tích cực (hoàn thuế, bảo hiểm, trúng SH, nhặt của rơi, trợ giá, quà sinh nhật, lộc khai xuân)
+ * - 7 lá Thử thách (sửa nhà bão lũ, mừng cưới, phạt nguội, thủy kích, dị ứng, học phí, vỡ ống nước)
+ */
 export const FATE_CARDS: readonly CardDef[] = [
   {
     id: 'fate_01',
@@ -175,30 +187,30 @@ export const FATE_CARDS: readonly CardDef[] = [
   {
     id: 'fate_09',
     deck: 'FATE',
-    title: 'Hỏng Máy Lạnh Mùa Nắng',
-    description: 'Khách sạn bị than phiền máy lạnh hư giữa trưa hè: Bồi thường 400.000 đ.',
-    effect: { type: 'CASH_DELTA', amount: -400_000 },
+    title: 'Hoàn Thuế Thu Nhập',
+    description: 'Quyết toán thuế cuối năm phát hiện nộp thừa: Nhận lại 1.000.000 đ từ Ngân hàng!',
+    effect: { type: 'CASH_DELTA', amount: 1_000_000 },
   },
   {
     id: 'fate_10',
     deck: 'FATE',
-    title: 'Quỹ Vì Người Nghèo',
-    description: 'Chung tay góp sức xây cầu nông thôn và nhà tình nghĩa: Ủng hộ 500.000 đ.',
-    effect: { type: 'CASH_DELTA', amount: -500_000 },
+    title: 'Bảo Hiểm Đáo Hạn',
+    description: 'Hợp đồng bảo hiểm tài sản đáo hạn đúng kỳ: Nhận chi trả quyền lợi 1.200.000 đ!',
+    effect: { type: 'CASH_DELTA', amount: 1_200_000 },
   },
   {
     id: 'fate_11',
     deck: 'FATE',
-    title: 'Khao Tiệc Tân Gia',
-    description: 'Mua đất mới khao bạn bè một chầu thả ga: Chi trả 600.000 đ.',
-    effect: { type: 'CASH_DELTA', amount: -600_000 },
+    title: 'Bốc Thăm Trúng SH',
+    description: 'Bốc thăm may mắn ở siêu thị trúng xe tay ga: Bán xe nhận ngay 1.500.000 đ!',
+    effect: { type: 'CASH_DELTA', amount: 1_500_000 },
   },
   {
     id: 'fate_12',
     deck: 'FATE',
-    title: 'Bị Móc Túi Tại Bến Xe',
-    description: 'Sơ ý bị kẻ gian móc ví nơi đông đúc: Mất trắng 800.000 đ.',
-    effect: { type: 'CASH_DELTA', amount: -800_000 },
+    title: 'Nhặt Được Của Rơi',
+    description: 'Nhặt được ví tiền trả lại người đánh mất: Được thưởng tuyên dương 500.000 đ!',
+    effect: { type: 'CASH_DELTA', amount: 500_000 },
   },
   {
     id: 'fate_13',
@@ -210,23 +222,23 @@ export const FATE_CARDS: readonly CardDef[] = [
   {
     id: 'fate_14',
     deck: 'FATE',
-    title: 'Chậm Kê Khai Thuế',
-    description: 'Kế toán nộp trễ tờ khai thuế môn bài: Nộp phạt hành chính 400.000 đ.',
-    effect: { type: 'CASH_DELTA', amount: -400_000 },
+    title: 'Trợ Giá Xăng Dầu',
+    description: 'Nhận gói hỗ trợ kích cầu vận tải du lịch: Cộng thêm 800.000 đ từ Ngân hàng!',
+    effect: { type: 'CASH_DELTA', amount: 800_000 },
   },
   {
     id: 'fate_15',
     deck: 'FATE',
-    title: 'Làm Lại Giấy Tờ',
-    description: 'Thất lạc giấy tờ tùy thân và bằng lái xe: Tốn 300.000 đ phí cấp đổi lại.',
-    effect: { type: 'CASH_DELTA', amount: -300_000 },
+    title: 'Quà Mừng Sinh Nhật',
+    description: 'Hôm nay là sinh nhật tưng bừng của bạn: Mỗi người chơi khác tặng quà 300.000 đ!',
+    effect: { type: 'COLLECT_FROM_OTHERS', amountPerPlayer: 300_000 },
   },
   {
     id: 'fate_16',
     deck: 'FATE',
-    title: 'Gây Rối Trật Tự',
-    description: 'Hát karaoke quá giờ gây rối khu phố lúc nửa đêm: Bị mời về đồn, đi thẳng vào Nhà Tù!',
-    effect: { type: 'GO_TO_JAIL' },
+    title: 'Lộc Khai Xuân Đầu Năm',
+    description: 'Khai xuân rực rỡ đón tài lộc bất ngờ: Nhận ngay phong bao lì xì 1.800.000 đ từ Ngân hàng!',
+    effect: { type: 'CASH_DELTA', amount: 1_800_000 },
   },
 ];
 
