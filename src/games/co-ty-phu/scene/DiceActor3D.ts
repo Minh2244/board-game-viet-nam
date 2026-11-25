@@ -86,10 +86,14 @@ interface SingleDieAnim {
 
 interface ImpactSpark {
   mesh: THREE.Mesh;
+  mat: THREE.MeshBasicMaterial;
   vel: THREE.Vector3;
   life: number;
   maxLife: number;
+  active: boolean;
 }
+
+const SPARK_POOL_SIZE = 32;
 
 export class DiceActor3D {
   public readonly group = new THREE.Group();
@@ -202,6 +206,25 @@ export class DiceActor3D {
     this.chargeRing = new THREE.Mesh(chargeGeo, this.chargeRingMat);
     this.chargeRing.position.set(0, 0.04, DICE_ZONE_Z);
     this.group.add(this.chargeRing);
+
+    for (let i = 0; i < SPARK_POOL_SIZE; i += 1) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: '#FDE047',
+        transparent: true,
+        opacity: 0,
+      });
+      const mesh = new THREE.Mesh(this.sparkGeo, mat);
+      mesh.visible = false;
+      this.group.add(mesh);
+      this.sparks.push({
+        mesh,
+        mat,
+        vel: new THREE.Vector3(),
+        life: 0,
+        maxLife: 0.4,
+        active: false,
+      });
+    }
   }
 
   private buildBevelledDie(): THREE.Group {
@@ -246,22 +269,27 @@ export class DiceActor3D {
 
   private spawnImpactSparks(origin: THREE.Vector3, count: number, colorHex: string): void {
     for (let i = 0; i < count; i += 1) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: colorHex,
-        transparent: true,
-        opacity: 0.95,
-      });
-      const mesh = new THREE.Mesh(this.sparkGeo, mat);
-      mesh.position.set(origin.x, 0.08, origin.z);
+      let sp = this.sparks.find((item) => !item.active);
+      if (!sp && this.sparks.length > 0) {
+        // Khi pool đầy, tái sử dụng hạt sắp tắt nhất để không cấp phát thêm Material/Mesh
+        sp = this.sparks.reduce((oldest, curr) =>
+          curr.life / curr.maxLife > oldest.life / oldest.maxLife ? curr : oldest,
+        );
+      }
+      if (!sp) return;
+
       const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.45;
       const speed = 1.4 + Math.random() * 2.1;
-      this.group.add(mesh);
-      this.sparks.push({
-        mesh,
-        vel: new THREE.Vector3(Math.cos(angle) * speed, 1.5 + Math.random() * 1.8, Math.sin(angle) * speed),
-        life: 0,
-        maxLife: 0.34 + Math.random() * 0.22,
-      });
+      sp.mat.color.set(colorHex);
+      sp.mat.opacity = 0.95;
+      sp.mesh.position.set(origin.x, 0.08, origin.z);
+      sp.mesh.rotation.set(0, 0, 0);
+      sp.mesh.scale.setScalar(1);
+      sp.mesh.visible = true;
+      sp.vel.set(Math.cos(angle) * speed, 1.5 + Math.random() * 1.8, Math.sin(angle) * speed);
+      sp.life = 0;
+      sp.maxLife = 0.34 + Math.random() * 0.22;
+      sp.active = true;
     }
   }
 
@@ -271,7 +299,7 @@ export class DiceActor3D {
 
   /** Trả về true chỉ khi xúc xắc đang tung, đang giữ nạp lực hoặc còn tia sáng/vòng hào quang (giúp tắt vòng lặp WebGL khi đứng im) */
   public isActive(): boolean {
-    return this.isRolling || this.isCharging || this.haloProgress >= 0 || this.sparks.length > 0;
+    return this.isRolling || this.isCharging || this.haloProgress >= 0 || this.sparks.some((s) => s.active);
   }
 
   public setCharging(active: boolean, charge01: number): void {
@@ -497,14 +525,14 @@ export class DiceActor3D {
       }
     }
 
-    // Hạt tia sáng va chạm 3D
-    for (let i = this.sparks.length - 1; i >= 0; i -= 1) {
+    // Hạt tia sáng va chạm 3D (dùng pool tái sử dụng, không cấp phát/xóa Material mỗi lần nảy)
+    for (let i = 0; i < this.sparks.length; i += 1) {
       const sp = this.sparks[i];
+      if (!sp.active) continue;
       sp.life += dt;
       if (sp.life >= sp.maxLife) {
-        this.group.remove(sp.mesh);
-        (sp.mesh.material as THREE.Material).dispose();
-        this.sparks.splice(i, 1);
+        sp.active = false;
+        sp.mesh.visible = false;
         continue;
       }
       sp.vel.y -= 7.2 * dt;
@@ -513,7 +541,7 @@ export class DiceActor3D {
       sp.mesh.rotation.y += 10 * dt;
       const ratio = 1 - sp.life / sp.maxLife;
       sp.mesh.scale.setScalar(ratio);
-      (sp.mesh.material as THREE.MeshBasicMaterial).opacity = ratio;
+      sp.mat.opacity = ratio;
     }
   }
 
@@ -524,7 +552,7 @@ export class DiceActor3D {
     }
     for (const sp of this.sparks) {
       this.group.remove(sp.mesh);
-      (sp.mesh.material as THREE.Material).dispose();
+      sp.mat.dispose();
     }
     this.sparks.length = 0;
     this.bodyGeo.dispose();

@@ -200,10 +200,10 @@ export class AblyFastLane {
       if (this.opts.ablyClientFactory) {
         client = this.opts.ablyClientFactory(authCallback);
       } else {
-        const ablyMod = await import('ably');
+        const { createClient } = await import('@ably/pubsub-device');
         if (this.destroyed) return;
-        const AblyCtor = ablyMod.default ?? ablyMod;
-        client = new AblyCtor.Realtime({
+        client = createClient({
+          clientId: this.opts.clientId,
           authCallback: authCallback as never,
           echoMessages: false,
           disconnectedRetryTimeout: 3000,

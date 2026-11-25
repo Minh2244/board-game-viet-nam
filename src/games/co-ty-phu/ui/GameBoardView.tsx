@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -851,59 +861,109 @@ function AnimatedCashValue({ value, className = '' }: { value: number; className
   );
 }
 
-/** Lớp hiệu ứng Nhãn +/-, Sóng chạm đất & Tia sao chạy theo bước nhân vật */
-function BoardVfxLayer({
-  popups,
-  shockwaves,
-  trails,
-}: {
-  popups: BoardCashPopup[];
-  shockwaves: ShockwaveEffect[];
-  trails: TrailSpark[];
-}) {
-  return (
-    <div className="pointer-events-none absolute inset-0 z-[55] overflow-hidden">
-      {trails.map((sp) => (
-        <div
-          key={sp.id}
-          style={{
-            left: sp.x,
-            top: sp.y,
-            backgroundColor: sp.color,
-            boxShadow: `0 0 8px ${sp.color}`,
-          }}
-          className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full opacity-90"
-        />
-      ))}
-
-      {shockwaves.map((sw) => (
-        <div
-          key={sw.id}
-          style={{ left: sw.x, top: sw.y, borderColor: sw.color }}
-          className="absolute h-14 w-14 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full border-2 opacity-85"
-        />
-      ))}
-
-      {popups.map((pop) => (
-        <div
-          key={pop.id}
-          style={{ left: 0, top: 0, transform: `translate3d(${pop.x}px, ${pop.y}px, 0) translate(-50%, -50%)` }}
-          className="absolute"
-        >
-          <div
-            className={`animate-bounce whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-black shadow-xl ${
-              pop.positive
-                ? 'border-emerald-200/80 bg-emerald-600/95 text-white'
-                : 'border-rose-200/80 bg-rose-600/95 text-white'
-            }`}
-          >
-            {pop.label}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+interface BoardVfxHandle {
+  spawnShockwave: (x: number, y: number, color: string) => void;
+  spawnTrailSpark: (x: number, y: number, color: string) => void;
+  spawnPopup: (x: number, y: number, positive: boolean, label: string) => void;
 }
+
+/** Lớp hiệu ứng Nhãn +/-, Sóng chạm đất & Tia sao tách state riêng (0 re-render GameBoardView khi nhảy bước) */
+const BoardVfxLayer = memo(
+  forwardRef<BoardVfxHandle>(function BoardVfxLayer(_, ref) {
+    const [popups, setPopups] = useState<BoardCashPopup[]>([]);
+    const [shockwaves, setShockwaves] = useState<ShockwaveEffect[]>([]);
+    const [trails, setTrails] = useState<TrailSpark[]>([]);
+    const mountedRef = useRef(true);
+    const timersRef = useRef<Set<number>>(new Set());
+
+    useEffect(() => {
+      mountedRef.current = true;
+      const timers = timersRef.current;
+      return () => {
+        mountedRef.current = false;
+        for (const t of timers) clearTimeout(t);
+        timers.clear();
+      };
+    }, []);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        spawnShockwave(x, y, color) {
+          const id = ++fxUid;
+          setShockwaves((prev) => [...prev.slice(-10), { id, x, y, color }]);
+          const timer = window.setTimeout(() => {
+            timersRef.current.delete(timer);
+            if (mountedRef.current) setShockwaves((prev) => prev.filter((s) => s.id !== id));
+          }, 640);
+          timersRef.current.add(timer);
+        },
+        spawnTrailSpark(x, y, color) {
+          const id = ++fxUid;
+          setTrails((prev) => [...prev.slice(-14), { id, x, y, color }]);
+          const timer = window.setTimeout(() => {
+            timersRef.current.delete(timer);
+            if (mountedRef.current) setTrails((prev) => prev.filter((s) => s.id !== id));
+          }, 440);
+          timersRef.current.add(timer);
+        },
+        spawnPopup(x, y, positive, label) {
+          const id = ++fxUid;
+          setPopups((prev) => [...prev.slice(-8), { id, x, y, positive, label }]);
+          const timer = window.setTimeout(() => {
+            timersRef.current.delete(timer);
+            if (mountedRef.current) setPopups((prev) => prev.filter((p) => p.id !== id));
+          }, 1450);
+          timersRef.current.add(timer);
+        },
+      }),
+      [],
+    );
+
+    return (
+      <div className="pointer-events-none absolute inset-0 z-[55] overflow-hidden">
+        {trails.map((sp) => (
+          <div
+            key={sp.id}
+            style={{
+              left: sp.x,
+              top: sp.y,
+              backgroundColor: sp.color,
+              boxShadow: `0 0 8px ${sp.color}`,
+            }}
+            className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full opacity-90"
+          />
+        ))}
+
+        {shockwaves.map((sw) => (
+          <div
+            key={sw.id}
+            style={{ left: sw.x, top: sw.y, borderColor: sw.color }}
+            className="absolute h-14 w-14 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full border-2 opacity-85"
+          />
+        ))}
+
+        {popups.map((pop) => (
+          <div
+            key={pop.id}
+            style={{ left: 0, top: 0, transform: `translate3d(${pop.x}px, ${pop.y}px, 0) translate(-50%, -50%)` }}
+            className="absolute"
+          >
+            <div
+              className={`animate-bounce whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-black shadow-xl ${
+                pop.positive
+                  ? 'border-emerald-200/80 bg-emerald-600/95 text-white'
+                  : 'border-rose-200/80 bg-rose-600/95 text-white'
+              }`}
+            >
+              {pop.label}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }),
+);
 
 export function GameBoardView({
   initialState,
@@ -948,9 +1008,8 @@ export function GameBoardView({
   const [lastBankNote, setLastBankNote] = useState<{ id: number; text: string; tone: 'in' | 'out' } | null>(null);
   const [pawnReactions, setPawnReactions] = useState<Record<string, 'give' | 'celebrate' | 'hurt'>>({});
   const [rowFlash, setRowFlash] = useState<Record<string, 'gain' | 'loss'>>({});
-  const [boardPopups, setBoardPopups] = useState<BoardCashPopup[]>([]);
-  const [shockwaves, setShockwaves] = useState<ShockwaveEffect[]>([]);
-  const [trailSparks, setTrailSparks] = useState<TrailSpark[]>([]);
+  const vfxRef = useRef<BoardVfxHandle | null>(null);
+  const tileFlashTimersRef = useRef<Map<number, number>>(new Map());
   const [flashingTileIdx, setFlashingTileIdx] = useState<number | null>(null);
   const [newlyBuiltTileIdx, setNewlyBuiltTileIdx] = useState<number | null>(null);
   const [botThought, setBotThought] = useState<BotThoughtStatus | null>(null);
@@ -1134,6 +1193,8 @@ export function GameBoardView({
       remoteQueueRef.current = [];
       cancelAnimationFrame(chargeRafRef.current);
       if (dramaBannerTimerRef.current) clearTimeout(dramaBannerTimerRef.current);
+      for (const timer of tileFlashTimersRef.current.values()) clearTimeout(timer);
+      tileFlashTimersRef.current.clear();
       controller.dispose();
       sceneRef.current = null;
     };
@@ -1178,20 +1239,27 @@ export function GameBoardView({
     [toLocalRect, stageW, stageH],
   );
 
+  const flashTileDom = useCallback((tileIndex: number, durationMs = 240) => {
+    const el = tileElRefs.current[tileIndex];
+    if (!el) return;
+    const prevTimer = tileFlashTimersRef.current.get(tileIndex);
+    if (prevTimer !== undefined) {
+      clearTimeout(prevTimer);
+    }
+    el.classList.add('ring-4', 'ring-yellow-300', 'brightness-125', 'z-20');
+    const timer = window.setTimeout(() => {
+      tileFlashTimersRef.current.delete(tileIndex);
+      tileElRefs.current[tileIndex]?.classList.remove('ring-4', 'ring-yellow-300', 'brightness-125', 'z-20');
+    }, durationMs);
+    tileFlashTimersRef.current.set(tileIndex, timer);
+  }, []);
+
   const spawnShockwave = useCallback((x: number, y: number, color: string) => {
-    const id = ++fxUid;
-    setShockwaves((prev) => [...prev, { id, x, y, color }]);
-    setTimeout(() => {
-      if (mountedRef.current) setShockwaves((prev) => prev.filter((s) => s.id !== id));
-    }, 640);
+    vfxRef.current?.spawnShockwave(x, y, color);
   }, []);
 
   const spawnTrailSpark = useCallback((x: number, y: number, color: string) => {
-    const id = ++fxUid;
-    setTrailSparks((prev) => [...prev.slice(-14), { id, x, y, color }]);
-    setTimeout(() => {
-      if (mountedRef.current) setTrailSparks((prev) => prev.filter((s) => s.id !== id));
-    }, 440);
+    vfxRef.current?.spawnTrailSpark(x, y, color);
   }, []);
 
   const triggerBoardShake = useCallback(() => {
@@ -1277,16 +1345,7 @@ export function GameBoardView({
     (playerId: string, positionsMap: Map<string, number>, delta: number, label: string) => {
       const tileIdx = positionsMap.get(playerId) ?? 0;
       const pos = getTileCenter(tileIdx);
-      const id = ++fxUid;
-      setBoardPopups((prev) => [
-        ...prev,
-        { id, x: pos.x, y: pos.y - 30, positive: delta >= 0, label },
-      ]);
-      setTimeout(() => {
-        if (mountedRef.current) {
-          setBoardPopups((prev) => prev.filter((p) => p.id !== id));
-        }
-      }, 1450);
+      vfxRef.current?.spawnPopup(pos.x, pos.y - 30, delta >= 0, label);
     },
     [getTileCenter],
   );
@@ -1487,9 +1546,9 @@ export function GameBoardView({
   );
 
   /**
-   * Diễn hoạt Standee Chibi 2.5D nhún – nghiêng người bật nhảy từng ô:
-   * Cập nhật trực tiếp style DOM trên `pawnElRefs` trong requestAnimationFrame (0 lần re-render React giữa mỗi bước nhảy!)
-   * giúp điện thoại đạt chuẩn 60fps tuyệt đối không giật lag!
+   * Diễn hoạt Standee Chibi 2.5D nhún – nghiêng người bật nhảy từng ô trên một timeline wall-clock duy nhất:
+   * - Cập nhật trực tiếp style DOM trên `pawnElRefs` & highlight ô bằng DOM class (0 React re-render giữa mọi bước nhảy!)
+   * - Khóa tiến độ theo `performance.now()` để điện thoại CPU thấp vẫn về đích cùng lúc với PC, không tích lũy độ trễ giữa các lượt.
    */
   const animateDomPawnPath = useCallback(
     async (
@@ -1500,96 +1559,137 @@ export function GameBoardView({
       landHex: string,
       charId?: PlayerState['characterId'],
     ) => {
-      let fromIdx = startIndex;
+      if (path.length === 0) return;
       const stepMs = path.length > 8 ? 155 : 200;
+      const totalDurationMs = path.length * stepMs;
       const initialPawnEl = pawnElRefs.current[playerId];
       const savedZIndex = initialPawnEl?.style.zIndex ?? '';
       const savedTransform = initialPawnEl?.style.transform ?? '';
       const finalIdx = path[path.length - 1] ?? startIndex;
 
+      const segments = path.map((toIdx, idx) => {
+        const fromIdx = idx === 0 ? startIndex : path[idx - 1];
+        const p0 = getTileCenter(fromIdx);
+        const p1 = getTileCenter(toIdx);
+        return {
+          toIdx,
+          p0,
+          p1,
+          dirSign: p1.x >= p0.x ? 1 : -1,
+        };
+      });
+
       try {
-        for (let i = 0; i < path.length; i += 1) {
-          const toIdx = path[i];
-          const p0 = getTileCenter(fromIdx);
-          const p1 = getTileCenter(toIdx);
-          const dirSign = p1.x >= p0.x ? 1 : -1;
+        await new Promise<void>((resolve) => {
+          const tStart = performance.now();
+          let rafId = 0;
+          let settled = false;
+          let lastStartedStep = -1;
 
-          gameAudio.playPawnHop(i, backwards, charId);
-          spawnTrailSpark(p0.x, p0.y, landHex);
+          const triggerStepStart = (stepIdx: number) => {
+            const seg = segments[stepIdx];
+            if (!seg) return;
+            gameAudio.playPawnHop(stepIdx, backwards, charId);
+            spawnTrailSpark(seg.p0.x, seg.p0.y, landHex);
+          };
 
-          await new Promise<void>((resolve) => {
-            const tStart = performance.now();
-            let rafId = 0;
-            let settled = false;
-            const finishStep = () => {
-              if (settled) return;
-              settled = true;
-              cancelAnimationFrame(rafId);
-              clearTimeout(safetyTimer);
-              resolve();
-            };
-            const safetyTimer = setTimeout(finishStep, stepMs + 420);
+          const finishTimeline = () => {
+            if (settled) return;
+            settled = true;
+            cancelAnimationFrame(rafId);
+            clearTimeout(safetyTimer);
+            resolve();
+          };
+          const safetyTimer = setTimeout(finishTimeline, totalDurationMs + 450);
 
-            const tick = (now: number) => {
-              if (settled) return;
-              const t = Math.min(1, (now - tStart) / stepMs);
-              const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-              const x = p0.x + (p1.x - p0.x) * ease;
-              const y = p0.y + (p1.y - p0.y) * ease;
-              const liftY = -Math.sin(t * Math.PI) * 34;
+          const tick = (now: number) => {
+            if (settled) return;
+            if (!mountedRef.current) {
+              finishTimeline();
+              return;
+            }
+            const elapsed = Math.max(0, now - tStart);
+            if (elapsed >= totalDurationMs) {
+              finishTimeline();
+              return;
+            }
 
-              let scaleX = 1;
-              let scaleY = 1;
-              let tiltDeg = 0;
-              if (t < 0.16) {
-                const s = t / 0.16;
-                scaleX = 1 + 0.18 * s;
-                scaleY = 1 - 0.18 * s;
-              } else if (t < 0.84) {
-                const air = Math.sin(((t - 0.16) / 0.68) * Math.PI);
-                scaleX = 1 - 0.12 * air;
-                scaleY = 1 + 0.18 * air;
-                tiltDeg = dirSign * 11 * air;
+            const rawStep = Math.min(path.length - 0.0001, elapsed / stepMs);
+            const stepIdx = Math.floor(rawStep);
+            const t = rawStep - stepIdx;
+
+            if (stepIdx > lastStartedStep) {
+              const skipped = stepIdx - lastStartedStep;
+              if (lastStartedStep >= 0 && skipped <= 2) {
+                for (let s = lastStartedStep; s < stepIdx; s += 1) {
+                  const landedSeg = segments[s];
+                  if (landedSeg) {
+                    flashTileDom(landedSeg.toIdx, 220);
+                    spawnShockwave(landedSeg.p1.x, landedSeg.p1.y, landHex);
+                  }
+                }
+              }
+              if (skipped <= 2) {
+                for (let s = Math.max(0, lastStartedStep + 1); s <= stepIdx; s += 1) {
+                  triggerStepStart(s);
+                }
               } else {
-                const l = Math.sin(((t - 0.84) / 0.16) * Math.PI);
-                scaleX = 1 + 0.2 * l;
-                scaleY = 1 - 0.2 * l;
+                triggerStepStart(stepIdx);
               }
+              lastStartedStep = stepIdx;
+            }
 
-              const currentAnim: ActivePawnAnim = {
-                playerId,
-                x,
-                y,
-                liftY,
-                scaleX,
-                scaleY,
-                tiltDeg,
-              };
-              livePawnOverrideRef.current = currentAnim;
+            const seg = segments[stepIdx];
+            const { p0, p1, dirSign } = seg;
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            const x = p0.x + (p1.x - p0.x) * ease;
+            const y = p0.y + (p1.y - p0.y) * ease;
+            const liftY = -Math.sin(t * Math.PI) * 34;
 
-              const pawnEl = pawnElRefs.current[playerId];
-              if (pawnEl) {
-                pawnEl.style.zIndex = '45';
-                pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
-              } else if (mountedRef.current) {
-                setActivePawnAnim(currentAnim);
-              }
+            let scaleX = 1;
+            let scaleY = 1;
+            let tiltDeg = 0;
+            if (t < 0.16) {
+              const s = t / 0.16;
+              scaleX = 1 + 0.18 * s;
+              scaleY = 1 - 0.18 * s;
+            } else if (t < 0.84) {
+              const air = Math.sin(((t - 0.16) / 0.68) * Math.PI);
+              scaleX = 1 - 0.12 * air;
+              scaleY = 1 + 0.18 * air;
+              tiltDeg = dirSign * 11 * air;
+            } else {
+              const l = Math.sin(((t - 0.84) / 0.16) * Math.PI);
+              scaleX = 1 + 0.2 * l;
+              scaleY = 1 - 0.2 * l;
+            }
 
-              if (t < 1 && mountedRef.current) {
-                rafId = requestAnimationFrame(tick);
-              } else {
-                finishStep();
-              }
+            const currentAnim: ActivePawnAnim = {
+              playerId,
+              x,
+              y,
+              liftY,
+              scaleX,
+              scaleY,
+              tiltDeg,
             };
+            livePawnOverrideRef.current = currentAnim;
+
+            const pawnEl = pawnElRefs.current[playerId];
+            if (pawnEl) {
+              pawnEl.style.zIndex = '45';
+              pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
+            } else {
+              setActivePawnAnim(currentAnim);
+            }
+
             rafId = requestAnimationFrame(tick);
-          });
+          };
 
-          if (mountedRef.current) {
-            setFlashingTileIdx(toIdx);
-            spawnShockwave(p1.x, p1.y, landHex);
-          }
-          fromIdx = toIdx;
-        }
+          triggerStepStart(0);
+          lastStartedStep = 0;
+          rafId = requestAnimationFrame(tick);
+        });
       } finally {
         livePawnOverrideRef.current = null;
         const pFinal = getTileCenter(finalIdx);
@@ -1604,15 +1704,12 @@ export function GameBoardView({
         }
         if (mountedRef.current) {
           setActivePawnAnim(null);
-          setFlashingTileIdx(finalIdx);
+          flashTileDom(finalIdx, 320);
           spawnShockwave(pFinal.x, pFinal.y, landHex);
-          setTimeout(() => {
-            if (mountedRef.current) setFlashingTileIdx(null);
-          }, 320);
         }
       }
     },
-    [getTileCenter, spawnShockwave, spawnTrailSpark],
+    [flashTileDom, getTileCenter, spawnShockwave, spawnTrailSpark],
   );
 
   /** Diễn hoạt Sân Bay kiểu điện ảnh thuần GPU translate3d (0 React re-render suốt 1.65s bay!) */
@@ -3696,11 +3793,7 @@ export function GameBoardView({
       <CashTransferOverlay transfers={cashTransfers} />
 
       {/* Lớp VFX Nhãn +/-, Sóng chạm đất & Tia sao */}
-      <BoardVfxLayer
-        popups={boardPopups}
-        shockwaves={shockwaves}
-        trails={trailSparks}
-      />
+      <BoardVfxLayer ref={vfxRef} />
 
       {/* Bảng Thông Tin Ô Đất 2 Cột (bấm vào bất kỳ ô nào trên 4 cạnh đều mở) */}
       {inspectTileIdx !== null && displayState.tiles[inspectTileIdx] && (

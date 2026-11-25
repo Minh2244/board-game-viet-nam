@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit"
   },
   "dependencies": {
+    "@ably/pubsub-device": "^3.2.0",
     "@upstash/redis": "^1.41.0",
-    "ably": "^2.30.0",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

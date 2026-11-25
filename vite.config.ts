@@ -112,7 +112,7 @@ export default defineConfig(({ mode }) => {
             if (id.includes('node_modules/three')) {
               return 'three-engine';
             }
-            if (id.includes('node_modules/ably')) {
+            if (id.includes('node_modules/@ably') || id.includes('node_modules/ably')) {
               return 'ably-realtime';
             }
             if (
