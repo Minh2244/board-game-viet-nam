@@ -9,6 +9,7 @@
  * Âm lượng nền dịu êm để làm không khí thư giãn và tuyệt đối không lấn át âm thanh đánh cờ (SFX).
  */
 
+import { attachAutoDisconnect, attachMultiSourceAutoDisconnect } from './audioLifecycle';
 import { createWarmRoomReverb, type WarmRoomReverbBus } from './warmRoomReverb';
 
 export type GameBgmScene = 'co-ty-phu' | 'o-an-quan' | 'co-ca-ngua' | 'co-vua' | 'co-tuong';
@@ -135,6 +136,7 @@ function playPiano(ctx: AudioContext, time: number, freq: number, dur: number, v
   g2.connect(flt);
   flt.connect(g);
   connectOut(g, true);
+  attachMultiSourceAutoDisconnect([osc1, osc2], [g2, flt, g]);
 
   osc1.start(time);
   osc2.start(time);
@@ -161,6 +163,7 @@ function playCelloPad(ctx: AudioContext, time: number, freq: number, dur: number
   osc.connect(flt);
   flt.connect(g);
   connectOut(g, true);
+  attachAutoDisconnect(osc, [flt, g]);
   osc.start(time);
   osc.stop(time + dur + 0.05);
 }
@@ -207,6 +210,7 @@ function playGuzheng(
   g2.connect(flt);
   flt.connect(g);
   connectOut(g, true);
+  attachMultiSourceAutoDisconnect([osc1, osc2], [g2, flt, g]);
 
   osc1.start(time);
   osc2.start(time);
@@ -238,6 +242,7 @@ function playFlute(ctx: AudioContext, time: number, freq: number, dur: number, v
 
   osc.connect(g);
   connectOut(g, true);
+  attachMultiSourceAutoDisconnect([osc, vib], [vibG, g]);
   osc.start(time);
   vib.start(time);
   osc.stop(time + dur + 0.04);
@@ -265,6 +270,7 @@ function playMarimba(ctx: AudioContext, time: number, freq: number, dur: number,
   overtone.connect(og);
   og.connect(g);
   connectOut(g, true);
+  attachMultiSourceAutoDisconnect([osc, overtone], [og, g]);
   osc.start(time);
   overtone.start(time);
   osc.stop(time + dur + 0.03);
@@ -286,6 +292,7 @@ function playBass(ctx: AudioContext, time: number, freq: number, dur: number, vo
   osc.connect(flt);
   flt.connect(g);
   connectOut(g, false);
+  attachAutoDisconnect(osc, [flt, g]);
   osc.start(time);
   osc.stop(time + dur + 0.03);
 }
@@ -303,6 +310,7 @@ function playSoftPerc(ctx: AudioContext, time: number, kind: 'wood' | 'shaker', 
     g.gain.exponentialRampToValueAtTime(0.0001, time + 0.045);
     osc.connect(g);
     connectOut(g, true);
+    attachAutoDisconnect(osc, [g]);
     osc.start(time);
     osc.stop(time + 0.055);
     return;
@@ -320,6 +328,7 @@ function playSoftPerc(ctx: AudioContext, time: number, kind: 'wood' | 'shaker', 
   src.connect(flt);
   flt.connect(g);
   connectOut(g, false);
+  attachAutoDisconnect(src, [flt, g]);
   src.start(time);
   src.stop(time + 0.05);
 }

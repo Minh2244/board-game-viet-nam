@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
 import { cryptoRandomInt } from '@/shared/crypto/random';
@@ -234,6 +234,13 @@ export default function CoTuongGame({ onExitToHub }: GameComponentProps) {
           onRemoteAction: (ev) => {
             remoteActionHandlerRef.current?.(ev);
           },
+          onStateResync: (authoritativeState) => {
+            setActiveMatch((prev) =>
+              prev?.mode === 'online'
+                ? { ...prev, state: authoritativeState, key: prev.key + 1 }
+                : prev,
+            );
+          },
           onRoomClosed: (reason) => {
             onlineClientRef.current = null;
             syncRoomUrl(null);
@@ -439,6 +446,26 @@ export default function CoTuongGame({ onExitToHub }: GameComponentProps) {
     onlineClientRef.current?.broadcastCommittedAction(action, nextState);
   }, []);
 
+  const onlineContext = useMemo<XiangqiOnlineContext | undefined>(() => {
+    if (activeMatch?.mode !== 'online' || !onlineSnapshot || !onlineClientRef.current) {
+      return undefined;
+    }
+    const me = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
+    return {
+      roomCode: onlineSnapshot.roomCode,
+      localColor: me?.color ?? 'red',
+      snapshot: onlineSnapshot,
+      onCommitAction: handleCommitOnlineAction,
+      registerRemoteActionHandler,
+    };
+  }, [
+    activeMatch?.mode,
+    onlineSnapshot,
+    myToken,
+    handleCommitOnlineAction,
+    registerRemoteActionHandler,
+  ]);
+
   if (autoRestoringCode) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-stone-950 p-6 text-white">
@@ -453,18 +480,6 @@ export default function CoTuongGame({ onExitToHub }: GameComponentProps) {
   }
 
   if (activeMatch) {
-    let onlineContext: XiangqiOnlineContext | undefined;
-    if (activeMatch.mode === 'online' && onlineSnapshot && onlineClientRef.current) {
-      const me = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
-      onlineContext = {
-        roomCode: onlineSnapshot.roomCode,
-        localColor: me?.color ?? 'red',
-        snapshot: onlineSnapshot,
-        onCommitAction: handleCommitOnlineAction,
-        registerRemoteActionHandler,
-      };
-    }
-
     return (
       <XiangqiBoardView
         key={activeMatch.key}

@@ -1,3 +1,4 @@
+import { attachAutoDisconnect, createIdleAudioContextManager } from '@/shared/audio/audioLifecycle';
 import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
 
 /**
@@ -10,6 +11,7 @@ let cCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
 let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
+const idleAudio = createIdleAudioContextManager(() => cCtx, 8000);
 
 function ensureAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -48,7 +50,7 @@ function ensureAudio(): AudioContext | null {
     for (let i = 0; i < nLen; i += 1) nd[i] = Math.random() * 2 - 1;
   }
 
-  if (cCtx.state === 'suspended') void cCtx.resume().catch(() => {});
+  idleAudio.touch();
   return cCtx;
 }
 
@@ -75,6 +77,7 @@ function stauntonWoodThud(pitch = 1, vol = 0.3, delay = 0): void {
   bodyGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.072);
   body.connect(bodyGain);
   send(bodyGain, true);
+  attachAutoDisconnect(body, [bodyGain]);
   body.start(t0);
   body.stop(t0 + 0.085);
 
@@ -94,6 +97,7 @@ function stauntonWoodThud(pitch = 1, vol = 0.3, delay = 0): void {
   wood.connect(woodFlt);
   woodFlt.connect(woodGain);
   send(woodGain, true);
+  attachAutoDisconnect(wood, [woodFlt, woodGain]);
   wood.start(t0);
   wood.stop(t0 + 0.05);
 
@@ -112,6 +116,7 @@ function stauntonWoodThud(pitch = 1, vol = 0.3, delay = 0): void {
     src.connect(flt);
     flt.connect(ng);
     send(ng, true);
+    attachAutoDisconnect(src, [flt, ng]);
     src.start(t0);
     src.stop(t0 + 0.032);
   }
@@ -130,6 +135,7 @@ function chime(freq: number, dur = 0.28, vol = 0.13, delay = 0, type: Oscillator
   gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   osc.connect(gain);
   send(gain, true);
+  attachAutoDisconnect(osc, [gain]);
   osc.start(t0);
   osc.stop(t0 + dur + 0.04);
 }

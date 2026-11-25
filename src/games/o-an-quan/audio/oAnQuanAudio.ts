@@ -1,3 +1,5 @@
+import { attachAutoDisconnect, createIdleAudioContextManager } from '@/shared/audio/audioLifecycle';
+
 /**
  * Hệ thống âm thanh vật lý dân gian Web Audio API thuần code cho Ô Ăn Quan (luôn mặc định bật SFX):
  * - Lụm đá (playHandScoop): tiếng bàn tay vốc sỏi cọ lòng hố gỗ + chuỗi hạt sỏi va vào nhau rột roạt.
@@ -8,6 +10,7 @@
 class OAnQuanAudioEngine {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private readonly idleAudio = createIdleAudioContextManager(() => this.ctx, 8000);
 
   private getCtx(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -19,9 +22,7 @@ class OAnQuanAudioEngine {
         this.ctx = new AC();
       }
     }
-    if (this.ctx && this.ctx.state === 'suspended') {
-      void this.ctx.resume().catch(() => {});
-    }
+    this.idleAudio.touch();
     return this.ctx;
   }
 
@@ -54,6 +55,7 @@ class OAnQuanAudioEngine {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    attachAutoDisconnect(osc, [gain]);
     osc.start(now);
     osc.stop(now + 0.075);
   }
@@ -84,6 +86,7 @@ class OAnQuanAudioEngine {
     noise.connect(filter);
     filter.connect(nGain);
     nGain.connect(ctx.destination);
+    attachAutoDisconnect(noise, [filter, nGain]);
     noise.start(now);
     noise.stop(now + 0.14);
 
@@ -105,6 +108,7 @@ class OAnQuanAudioEngine {
 
       osc.connect(g);
       g.connect(ctx.destination);
+      attachAutoDisconnect(osc, [g]);
       osc.start(t);
       osc.stop(t + 0.042);
     }
@@ -133,6 +137,7 @@ class OAnQuanAudioEngine {
     woodGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
     wood.connect(woodGain);
     woodGain.connect(ctx.destination);
+    attachAutoDisconnect(wood, [woodGain]);
     wood.start(now);
     wood.stop(now + 0.06);
 
@@ -153,6 +158,7 @@ class OAnQuanAudioEngine {
     clackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.032);
     clack.connect(clackGain);
     clackGain.connect(ctx.destination);
+    attachAutoDisconnect(clack, [clackGain]);
     clack.start(now);
     clack.stop(now + 0.036);
   }
@@ -182,6 +188,7 @@ class OAnQuanAudioEngine {
 
     thump.connect(thumpGain);
     thumpGain.connect(ctx.destination);
+    attachAutoDisconnect(thump, [thumpGain]);
     thump.start(now);
     thump.stop(now + 0.15);
 
@@ -201,6 +208,7 @@ class OAnQuanAudioEngine {
     slapNoise.connect(slapBand);
     slapBand.connect(slapGain);
     slapGain.connect(ctx.destination);
+    attachAutoDisconnect(slapNoise, [slapBand, slapGain]);
     slapNoise.start(now);
     slapNoise.stop(now + 0.085);
 
@@ -219,6 +227,7 @@ class OAnQuanAudioEngine {
     crisp.connect(highPass);
     highPass.connect(crispGain);
     crispGain.connect(ctx.destination);
+    attachAutoDisconnect(crisp, [highPass, crispGain]);
     crisp.start(now);
     crisp.stop(now + 0.048);
   }
@@ -244,6 +253,7 @@ class OAnQuanAudioEngine {
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
       osc.connect(g);
       g.connect(ctx.destination);
+      attachAutoDisconnect(osc, [g]);
       osc.start(t);
       osc.stop(t + 0.045);
     }
@@ -262,6 +272,7 @@ class OAnQuanAudioEngine {
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      attachAutoDisconnect(osc, [gain]);
       osc.start(t);
       osc.stop(t + 0.24);
     });
@@ -283,6 +294,7 @@ class OAnQuanAudioEngine {
     gongGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
     gong.connect(gongGain);
     gongGain.connect(ctx.destination);
+    attachAutoDisconnect(gong, [gongGain]);
     gong.start(now);
     gong.stop(now + 0.82);
 
@@ -298,6 +310,7 @@ class OAnQuanAudioEngine {
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
       osc.connect(g);
       g.connect(ctx.destination);
+      attachAutoDisconnect(osc, [g]);
       osc.start(t);
       osc.stop(t + 0.38);
     });
@@ -318,6 +331,7 @@ class OAnQuanAudioEngine {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
     osc.connect(gain);
     gain.connect(ctx.destination);
+    attachAutoDisconnect(osc, [gain]);
     osc.start(now);
     osc.stop(now + 0.18);
   }
@@ -338,6 +352,7 @@ class OAnQuanAudioEngine {
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
       osc.connect(g);
       g.connect(ctx.destination);
+      attachAutoDisconnect(osc, [g]);
       osc.start(t);
       osc.stop(t + 0.14);
     });
@@ -366,6 +381,7 @@ class OAnQuanAudioEngine {
       g.gain.exponentialRampToValueAtTime(0.001, now + note.t + note.d);
       osc.connect(g);
       g.connect(ctx.destination);
+      attachAutoDisconnect(osc, [g]);
       osc.start(now + note.t);
       osc.stop(now + note.t + note.d + 0.04);
     }

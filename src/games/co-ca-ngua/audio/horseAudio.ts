@@ -1,3 +1,4 @@
+import { attachAutoDisconnect, createIdleAudioContextManager } from '@/shared/audio/audioLifecycle';
 import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
 
 // Hiệu ứng âm thanh Cờ Cá Ngựa (mặc định luôn bật SFX, không bị tắt theo nút Nhạc nền)
@@ -6,6 +7,7 @@ let hCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
 let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
+const idleAudio = createIdleAudioContextManager(() => hCtx, 8000);
 
 function ensureAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -46,9 +48,7 @@ function ensureAudio(): AudioContext | null {
     }
   }
 
-  if (hCtx.state === 'suspended') {
-    void hCtx.resume().catch(() => {});
-  }
+  idleAudio.touch();
   return hCtx;
 }
 
@@ -86,8 +86,9 @@ function tone(
   gain.gain.linearRampToValueAtTime(gainPeak, t0 + Math.min(0.015, dur * 0.18));
   gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
 
+  let flt: BiquadFilterNode | null = null;
   if (filterHz > 0) {
-    const flt = ac.createBiquadFilter();
+    flt = ac.createBiquadFilter();
     flt.type = 'lowpass';
     flt.frequency.setValueAtTime(filterHz, t0);
     osc.connect(flt);
@@ -97,6 +98,7 @@ function tone(
   }
 
   sendOut(gain, wet);
+  attachAutoDisconnect(osc, [flt, gain]);
   osc.start(t0);
   osc.stop(t0 + dur + 0.03);
 }
@@ -133,6 +135,7 @@ function noiseBurst(
   src.connect(filter);
   filter.connect(gain);
   sendOut(gain, wet);
+  attachAutoDisconnect(src, [filter, gain]);
   src.start(t0);
   src.stop(t0 + dur + 0.03);
 }

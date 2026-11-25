@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
@@ -327,6 +327,13 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
           onRemoteAction: (ev) => {
             remoteActionHandlerRef.current?.(ev);
           },
+          onStateResync: (authoritativeState) => {
+            setActiveMatch((prev) =>
+              prev?.isOnline
+                ? { state: authoritativeState, key: prev.key + 1, isOnline: true }
+                : prev,
+            );
+          },
           onRemoteDiceCharge: (ev) => {
             remoteDiceChargeHandlerRef.current?.(ev);
           },
@@ -528,6 +535,31 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
     setActiveMatch((prev) => ({ state: savedMatch, key: (prev?.key ?? 0) + 1, isOnline: false }));
   };
 
+  const onlineContext = useMemo<OnlineGameContext | undefined>(() => {
+    if (!activeMatch?.isOnline || !onlineSnapshot || !onlineClientRef.current) return undefined;
+    const meMember = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
+    return {
+      roomCode: onlineSnapshot.roomCode,
+      localPlayerId: meMember?.seatId ?? null,
+      isHost: onlineClientRef.current.isHost,
+      snapshot: onlineSnapshot,
+      onCommitLocalAction: handleCommitLocalOnlineAction,
+      registerRemoteActionHandler,
+      onBroadcastDiceCharge: handleBroadcastOnlineDiceCharge,
+      registerRemoteDiceChargeHandler,
+      onDissolveRoom: handleDissolveOnlineRoom,
+    };
+  }, [
+    activeMatch?.isOnline,
+    onlineSnapshot,
+    myToken,
+    handleCommitLocalOnlineAction,
+    registerRemoteActionHandler,
+    handleBroadcastOnlineDiceCharge,
+    registerRemoteDiceChargeHandler,
+    handleDissolveOnlineRoom,
+  ]);
+
   // 0. ĐANG TỰ KHÔI PHỤC PHÒNG ONLINE NGAY SAU KHI F5
   if (autoRestoringRoomCode) {
     return (
@@ -547,22 +579,6 @@ export default function CoTyPhuGame({ onExitToHub }: GameComponentProps) {
 
   // 1. ĐANG TRONG VÁN CỜ (OFFLINE HOẶC ONLINE)
   if (activeMatch) {
-    let onlineContext: OnlineGameContext | undefined;
-    if (activeMatch.isOnline && onlineSnapshot && onlineClientRef.current) {
-      const meMember = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
-      onlineContext = {
-        roomCode: onlineSnapshot.roomCode,
-        localPlayerId: meMember?.seatId ?? null,
-        isHost: onlineClientRef.current.isHost,
-        snapshot: onlineSnapshot,
-        onCommitLocalAction: handleCommitLocalOnlineAction,
-        registerRemoteActionHandler,
-        onBroadcastDiceCharge: handleBroadcastOnlineDiceCharge,
-        registerRemoteDiceChargeHandler,
-        onDissolveRoom: handleDissolveOnlineRoom,
-      };
-    }
-
     return (
       <GameBoardView
         key={activeMatch.key}

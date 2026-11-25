@@ -45,6 +45,8 @@ export interface AblyFastLaneOptions {
   clientId: string;
   onPacket: (packet: Record<string, unknown>) => void;
   onAvailabilityChange: (available: boolean) => void;
+  /** Gọi ngay khi Ably không khả dụng/tắt/hết timeout để kích hoạt P2P + Long-Polling dự phòng */
+  onFallbackNeeded?: () => void;
   connectTimeoutMs?: number;
   /** Cho phép unit test tiêm fetch / Ably client giả lập để kiểm chứng failover tự động */
   tokenFetchFn?: AblyTokenFetchFn;
@@ -102,6 +104,7 @@ export class AblyFastLane {
   private client: AblyRealtimeLike | null = null;
   private channel: AblyChannelLike | null = null;
   private available = false;
+  private starting = false;
   private permanentlyDegraded = false;
   private destroyed = false;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -114,17 +117,27 @@ export class AblyFastLane {
     return this.available && !this.permanentlyDegraded && !this.destroyed;
   }
 
+  /** Cho biết Ably đang kết nối (trong ngưỡng timeout) hoặc đã thông — không cần mở WebRTC P2P thừa */
+  public shouldPreferAbly(): boolean {
+    return !this.destroyed && !this.permanentlyDegraded && (this.available || this.starting || this.connectTimer !== null);
+  }
+
   public isPermanentlyDegraded(): boolean {
     return this.permanentlyDegraded;
   }
 
   public async start(): Promise<void> {
-    if (this.destroyed || this.permanentlyDegraded) return;
+    if (this.destroyed || this.permanentlyDegraded) {
+      if (!this.destroyed) this.notifyFallbackNeeded();
+      return;
+    }
     if (!this.opts.ablyClientFactory && isFastLaneDisabled()) {
       this.setAvailable(false);
+      this.notifyFallbackNeeded();
       return;
     }
 
+    this.starting = true;
     const tokenUrl = this.buildTokenUrl();
     const fetcher = this.opts.tokenFetchFn ?? defaultTokenFetch;
 
@@ -132,7 +145,9 @@ export class AblyFastLane {
     try {
       firstTokenPayload = await fetcher(tokenUrl);
     } catch {
+      this.starting = false;
       this.setAvailable(false);
+      this.notifyFallbackNeeded();
       return;
     }
 
@@ -143,7 +158,9 @@ export class AblyFastLane {
       !firstTokenPayload.tokenRequest ||
       !firstTokenPayload.channelName
     ) {
+      this.starting = false;
       this.setAvailable(false);
+      if (!this.destroyed) this.notifyFallbackNeeded();
       return;
     }
 
@@ -205,6 +222,7 @@ export class AblyFastLane {
         this.connectTimer = null;
         if (!this.available && !this.destroyed) {
           this.setAvailable(false);
+          this.notifyFallbackNeeded();
         }
       }, timeoutMs);
 
@@ -224,8 +242,9 @@ export class AblyFastLane {
           if (isAblyQuotaOrFatalError(stateChange.reason) || state === 'failed') {
             this.degradePermanently();
           } else {
-            // Mất kết nối thoáng qua -> bật ngay Long-Polling dự phòng trong lúc Ably tự nối lại!
+            // Mất kết nối thoáng qua -> bật ngay Long-Polling & P2P dự phòng trong lúc Ably tự nối lại!
             this.setAvailable(false);
+            this.notifyFallbackNeeded();
           }
         }
       });
@@ -254,7 +273,9 @@ export class AblyFastLane {
         }
         this.setAvailable(true);
       }
+      this.starting = false;
     } catch {
+      this.starting = false;
       this.degradePermanently();
     }
   }
@@ -314,13 +335,24 @@ export class AblyFastLane {
     }
   }
 
+  private notifyFallbackNeeded(): void {
+    if (this.destroyed) return;
+    try {
+      this.opts.onFallbackNeeded?.();
+    } catch {
+      // Ignore callback error
+    }
+  }
+
   private degradePermanently(): void {
+    this.starting = false;
     this.permanentlyDegraded = true;
     if (this.connectTimer !== null) {
       clearTimeout(this.connectTimer);
       this.connectTimer = null;
     }
     this.setAvailable(false);
+    this.notifyFallbackNeeded();
     this.closeClientQuietly();
   }
 

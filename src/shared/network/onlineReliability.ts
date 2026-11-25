@@ -8,6 +8,27 @@
 
 export const ACTION_RETRY_DELAYS_MS = [250, 600, 1200, 2000] as const;
 
+export async function fetchJsonWithTimeout<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ status: number; data: T }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, Math.max(1000, timeoutMs));
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    const data = (await res.json().catch(() => ({}))) as T;
+    return { status: res.status, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function postWithRetry<TResponse extends { status: number; data: unknown }>(
   postFn: () => Promise<TResponse>,
   isDestroyed: () => boolean,
@@ -115,4 +136,76 @@ export function getAdaptiveBackupPollIntervalMs(opts: {
   if (opts.ablyConnected) return 10000; // Ably WebSocket đang nhận tức thì (~40ms) -> giãn HTTP dự phòng 10s tiết kiệm ~95% Upstash!
   if (opts.allRtcOpen) return 2400; // Đủ P2P mọi thành viên trong phòng -> giãn HTTP dự phòng 2.4s
   return 25; // Chế độ dự phòng Long-Polling Edge -> nối lại ngay lập tức!
+}
+
+export type OrderedActionIngestResult<TPacket> =
+  | { status: 'stale' }
+  | { status: 'buffered_gap'; missingVersion: number }
+  | { status: 'ready'; orderedPackets: TPacket[] };
+
+export interface OrderedActionBuffer<TPacket> {
+  ingest: (
+    packetVersion: number,
+    currentVersion: number,
+    packet: TPacket,
+  ) => OrderedActionIngestResult<TPacket>;
+  dropThrough: (version: number) => void;
+  hasPending: () => boolean;
+  getMinPendingVersion: () => number | null;
+  clear: () => void;
+}
+
+/**
+ * Bộ đệm chống lệch thứ tự gói ACTION_COMMIT / MOVE_COMMIT trên mạng 4G/Ably:
+ * - Gói cũ (`<= currentVersion`): bỏ qua (`stale`).
+ * - Gói đến sớm hơn gói trước (`> currentVersion + 1`): tạm giữ trong hàng đợi (KHÔNG áp dụng lệch state và KHÔNG nâng matchVersion!)
+ *   để chờ gói `currentVersion + 1` về rồi xả tuần tự đúng phiên bản `v+1 -> v+2 -> v+3`.
+ */
+export function createOrderedActionBuffer<TPacket>(maxBuffered = 64): OrderedActionBuffer<TPacket> {
+  const pending = new Map<number, TPacket>();
+
+  return {
+    ingest(packetVersion, currentVersion, packet) {
+      if (packetVersion <= currentVersion) {
+        return { status: 'stale' };
+      }
+      if (packetVersion > currentVersion + 1) {
+        if (pending.size >= maxBuffered) {
+          const oldestKey = Math.min(...pending.keys());
+          if (packetVersion > oldestKey) {
+            pending.delete(oldestKey);
+          }
+        }
+        pending.set(packetVersion, packet);
+        return { status: 'buffered_gap', missingVersion: currentVersion + 1 };
+      }
+
+      const orderedPackets: TPacket[] = [packet];
+      let nextExpected = packetVersion + 1;
+      while (pending.has(nextExpected)) {
+        const buffered = pending.get(nextExpected)!;
+        pending.delete(nextExpected);
+        orderedPackets.push(buffered);
+        nextExpected += 1;
+      }
+      return { status: 'ready', orderedPackets };
+    },
+    dropThrough(version) {
+      for (const k of pending.keys()) {
+        if (k <= version) {
+          pending.delete(k);
+        }
+      }
+    },
+    hasPending() {
+      return pending.size > 0;
+    },
+    getMinPendingVersion() {
+      if (pending.size === 0) return null;
+      return Math.min(...pending.keys());
+    },
+    clear() {
+      pending.clear();
+    },
+  };
 }

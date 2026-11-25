@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { readJson, writeJson } from '@/shared/storage/local';
+import {
+  attachAutoDisconnect,
+  attachMultiSourceAutoDisconnect,
+  createIdleAudioContextManager,
+} from './audioLifecycle';
 import { gameBgmEngine, type GameBgmScene } from './gameBgmEngine';
 
 export type BgmScene = 'hub' | GameBgmScene | null;
@@ -62,6 +67,26 @@ let hubActive = false;
 let currentBgmScene: BgmScene = null;
 let bgmStep = 0;
 let nextNoteTime = 0;
+let hubVisibilityHooked = false;
+const hubIdleAudio = createIdleAudioContextManager(
+  () => (!hubActive || useAudioStore.getState().muted ? audioCtx : null),
+  3500,
+);
+
+function hookHubVisibility(): void {
+  if (hubVisibilityHooked || typeof document === 'undefined') return;
+  hubVisibilityHooked = true;
+  document.addEventListener('visibilitychange', () => {
+    if (!audioCtx) return;
+    if (document.hidden) {
+      if (audioCtx.state === 'running') {
+        void audioCtx.suspend().catch(() => {});
+      }
+    } else if (hubActive && !useAudioStore.getState().muted && audioCtx.state === 'suspended') {
+      void audioCtx.resume().catch(() => {});
+    }
+  });
+}
 
 // Nhịp độ lễ hội dân gian hiện đại sôi động: 124 BPM (16 bước / ô nhịp = 121ms mỗi móc kép)
 const BPM = 124;
@@ -208,6 +233,7 @@ const FLUTE_FILLS: Readonly<Record<number, { freq: number; durSteps: number }>> 
 
 function getCtx(): AudioContext | null {
   if (typeof window === 'undefined') return null;
+  hookHubVisibility();
   const Ctx =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -260,8 +286,9 @@ function playTone(
   const ctx = getCtx();
   if (!ctx) return;
   if (ctx.state === 'suspended') {
-    void ctx.resume();
+    void ctx.resume().catch(() => {});
   }
+  hubIdleAudio.touch();
 
   const now = ctx.currentTime;
   const osc = ctx.createOscillator();
@@ -276,6 +303,7 @@ function playTone(
 
   osc.connect(gain);
   gain.connect(ctx.destination);
+  attachAutoDisconnect(osc, [gain]);
   osc.start(now);
   osc.stop(now + durationSec + 0.02);
 }
@@ -323,6 +351,7 @@ function scheduleZitherNote(
   osc2Gain.connect(filter);
   filter.connect(gain);
   gain.connect(dest);
+  attachMultiSourceAutoDisconnect([osc1, osc2], [osc2Gain, filter, gain]);
 
   osc1.start(time);
   osc2.start(time);
@@ -361,6 +390,7 @@ function scheduleFluteNote(
 
   osc.connect(gain);
   gain.connect(dest);
+  attachMultiSourceAutoDisconnect([osc, vib], [vibGain, gain]);
 
   osc.start(time);
   vib.start(time);
@@ -395,6 +425,7 @@ function scheduleBassNote(
   osc.connect(filter);
   filter.connect(gain);
   gain.connect(dest);
+  attachAutoDisconnect(osc, [filter, gain]);
   osc.start(time);
   osc.stop(time + durSec + 0.02);
 }
@@ -413,6 +444,8 @@ function scheduleChordStrum(
   filter.Q.setValueAtTime(0.9, time);
   filter.connect(dest);
 
+  const sources: OscillatorNode[] = [];
+  const gains: GainNode[] = [];
   notes.forEach((f, idx) => {
     const t0 = time + idx * 0.009;
     const osc = ctx.createOscillator();
@@ -426,9 +459,12 @@ function scheduleChordStrum(
 
     osc.connect(g);
     g.connect(filter);
+    sources.push(osc);
+    gains.push(g);
     osc.start(t0);
     osc.stop(t0 + 0.18);
   });
+  attachMultiSourceAutoDisconnect(sources, [...gains, filter]);
 }
 
 /** 5a. Trống Kick chắc khỏe */
@@ -445,6 +481,7 @@ function scheduleKick(ctx: AudioContext, dest: AudioNode, time: number, accent =
 
   osc.connect(gain);
   gain.connect(dest);
+  attachAutoDisconnect(osc, [gain]);
   osc.start(time);
   osc.stop(time + 0.17);
 }
@@ -467,6 +504,7 @@ function scheduleSnareClap(ctx: AudioContext, dest: AudioNode, time: number, acc
   src.connect(hp);
   hp.connect(g);
   g.connect(dest);
+  attachAutoDisconnect(src, [hp, g]);
   src.start(time);
   src.stop(time + 0.13);
 
@@ -481,6 +519,7 @@ function scheduleSnareClap(ctx: AudioContext, dest: AudioNode, time: number, acc
 
   body.connect(bodyGain);
   bodyGain.connect(dest);
+  attachAutoDisconnect(body, [bodyGain]);
   body.start(time);
   body.stop(time + 0.09);
 }
@@ -502,6 +541,7 @@ function scheduleHiHat(ctx: AudioContext, dest: AudioNode, time: number, open = 
   src.connect(hp);
   hp.connect(g);
   g.connect(dest);
+  attachAutoDisconnect(src, [hp, g]);
   src.start(time);
   src.stop(time + dur + 0.02);
 }
@@ -521,6 +561,7 @@ function scheduleWoodblock(ctx: AudioContext, dest: AudioNode, time: number, hig
 
   osc.connect(gain);
   gain.connect(dest);
+  attachAutoDisconnect(osc, [gain]);
   osc.start(time);
   osc.stop(time + 0.07);
 }
@@ -617,6 +658,7 @@ function stopBgmInternal() {
     bgmMasterGain = null;
     bgmCompressor = null;
   }
+  hubIdleAudio.touch();
   useAudioStore.setState({ bgmPlaying: false });
 }
 

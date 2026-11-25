@@ -31,6 +31,24 @@ export class MonopolySceneController {
   private readonly isCompactViewport: boolean;
   private lastTime = performance.now();
   private resizeObserver: ResizeObserver;
+  private contextLost = false;
+  private readonly handleContextLost = (ev: Event) => {
+    ev.preventDefault();
+    this.contextLost = true;
+    this.loopRunning = false;
+    cancelAnimationFrame(this.rafId);
+    this.rafId = 0;
+  };
+  private readonly handleContextRestored = () => {
+    this.contextLost = false;
+    if (!this.disposed) {
+      if (this.diceActor.isActive() || this.confetti.length > 0) {
+        this.ensureLoopRunning();
+      } else {
+        this.renderSingleFrame();
+      }
+    }
+  };
 
   constructor(container: HTMLElement, initialState: GameState, lowPowerMode = false) {
     this.container = container;
@@ -61,6 +79,8 @@ export class MonopolySceneController {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
+    this.renderer.domElement.addEventListener('webglcontextlost', this.handleContextLost, false);
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.handleContextRestored, false);
     container.appendChild(this.renderer.domElement);
 
     this.setupLighting();
@@ -134,12 +154,16 @@ export class MonopolySceneController {
   }
 
   private renderSingleFrame(): void {
-    if (this.disposed) return;
-    this.renderer.render(this.scene, this.camera);
+    if (this.disposed || this.contextLost) return;
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } catch {
+      // Bỏ qua lỗi thoáng qua nếu trình duyệt vừa thu hồi ngữ cảnh WebGL
+    }
   }
 
   private ensureLoopRunning(): void {
-    if (this.disposed || this.loopRunning) return;
+    if (this.disposed || this.contextLost || this.loopRunning) return;
     this.loopRunning = true;
     this.lastTime = performance.now();
     this.rafId = requestAnimationFrame(this.animate);
@@ -197,7 +221,11 @@ export class MonopolySceneController {
   }
 
   private animate = (): void => {
-    if (this.disposed) return;
+    if (this.disposed || this.contextLost) {
+      this.loopRunning = false;
+      this.rafId = 0;
+      return;
+    }
 
     const now = performance.now();
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
@@ -217,7 +245,13 @@ export class MonopolySceneController {
     }
 
     this.diceActor.update(dt);
-    this.renderer.render(this.scene, this.camera);
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } catch {
+      this.loopRunning = false;
+      this.rafId = 0;
+      return;
+    }
 
     // Tự động dừng vòng lặp WebGL ngay khi mọi chuyển động 3D kết thúc -> 0% GPU lúc đứng yên!
     if (this.diceActor.isActive() || this.confetti.length > 0) {
@@ -233,6 +267,8 @@ export class MonopolySceneController {
     this.loopRunning = false;
     cancelAnimationFrame(this.rafId);
     this.resizeObserver.disconnect();
+    this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost, false);
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.handleContextRestored, false);
     this.diceActor.dispose();
 
     const disposeMat = (m: THREE.Material) => {

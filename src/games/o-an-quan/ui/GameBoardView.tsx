@@ -661,6 +661,9 @@ export function GameBoardView({
       // Xác thực chặt chẽ mọi nước đi (cả Offline lẫn Online) qua validateSowAction
       const validCheck = validateSowAction(curState, actorSide, pitIndex, direction);
       if (!validCheck.valid) {
+        if (remoteQueueRef.current.length === 0 && mountedRef.current) {
+          setIsAnimating(false);
+        }
         return;
       }
 
@@ -672,38 +675,62 @@ export function GameBoardView({
       const { state: nextState, steps } = executeSowMove(curState, pitIndex, direction, actorSide);
       canonicalRef.current = nextState;
 
-      // Lưu ván Offline tự động (hoặc phát tán nước đi lên phòng Online)
-      const online = onlineContextRef.current;
-      if (online) {
-        if (!options?.isRemote) {
-          online.onCommitLocalMove(actorSide, pitIndex, direction, nextState);
-        } else if (options.remoteMatchVersion !== undefined) {
-          online.onSyncRemoteVerifiedState(nextState, options.remoteMatchVersion);
+      try {
+        // Lưu ván Offline tự động (hoặc phát tán nước đi lên phòng Online)
+        const online = onlineContextRef.current;
+        if (online) {
+          if (!options?.isRemote) {
+            online.onCommitLocalMove(actorSide, pitIndex, direction, nextState);
+          } else if (options.remoteMatchVersion !== undefined) {
+            online.onSyncRemoteVerifiedState(nextState, options.remoteMatchVersion);
+          }
+        } else if (mode === 'vs-bot' || mode === 'pass-and-play') {
+          if (nextState.phase === 'GAME_OVER') {
+            clearOfflineOAnQuanMatch();
+          } else {
+            saveOfflineOAnQuanMatch({ mode, botDifficulty, state: nextState });
+          }
         }
-      } else if (mode === 'vs-bot' || mode === 'pass-and-play') {
-        if (nextState.phase === 'GAME_OVER') {
-          clearOfflineOAnQuanMatch();
+
+        await playAnimationSteps(steps, nextState);
+      } catch (err) {
+        console.error('[OAnQuan] Loi dien hoat nuoc di, phuc hoi trang thai:', err);
+        if (mountedRef.current) {
+          setActiveHand(null);
+          setSlapShockwave(null);
+          setDropRipple(null);
+          setActiveHighlight(null);
+          setBridgeEmptyIdx(null);
+          setHandBanner(null);
+          setIsBoardShaking(false);
+          setPlaybackPits(nextState.pits);
+          setPlaybackPlayers(nextState.players);
+          setCanonicalState(nextState);
+        }
+      } finally {
+        if (mountedRef.current) {
+          // Xử lý nối tiếp nước đi Online đang xếp hàng (bỏ qua gói cũ/trùng không hợp lệ để không bao giờ kẹt khóa isAnimating!)
+          let queued = remoteQueueRef.current.shift();
+          while (
+            queued &&
+            !validateSowAction(canonicalRef.current, queued.side, queued.pitIndex, queued.direction).valid
+          ) {
+            queued = remoteQueueRef.current.shift();
+          }
+          if (queued) {
+            isAnimatingRef.current = false;
+            void dispatchMove(queued.pitIndex, queued.direction, {
+              isRemote: true,
+              actorSide: queued.side,
+              remoteMatchVersion: queued.matchVersion,
+            });
+          } else {
+            isAnimatingRef.current = false;
+            setIsAnimating(false);
+          }
         } else {
-          saveOfflineOAnQuanMatch({ mode, botDifficulty, state: nextState });
+          isAnimatingRef.current = false;
         }
-      }
-
-      await playAnimationSteps(steps, nextState);
-
-      if (!mountedRef.current) return;
-
-      // Xử lý nối tiếp nước đi Online đang xếp hàng (nếu có)
-      const queued = remoteQueueRef.current.shift();
-      if (queued) {
-        isAnimatingRef.current = false;
-        void dispatchMove(queued.pitIndex, queued.direction, {
-          isRemote: true,
-          actorSide: queued.side,
-          remoteMatchVersion: queued.matchVersion,
-        });
-      } else {
-        isAnimatingRef.current = false;
-        setIsAnimating(false);
       }
     },
     [mode, botDifficulty, playAnimationSteps],

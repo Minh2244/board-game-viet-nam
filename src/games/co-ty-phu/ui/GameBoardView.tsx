@@ -460,7 +460,7 @@ const BoardTileCell = memo(function BoardTileCell({
           className={`relative z-10 ${
             isSide
               ? 'min-w-0'
-              : 'w-full bg-slate-950/60 px-0.5 py-1.5 backdrop-blur-[1px]'
+              : 'w-full bg-slate-950/75 px-0.5 py-1.5'
           }`}
         >
           <span className="block whitespace-nowrap text-[10.5px] leading-none font-black uppercase tracking-[0.04em] text-amber-100 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
@@ -506,7 +506,7 @@ const BoardTileCell = memo(function BoardTileCell({
           className={`relative z-10 ${
             isSide
               ? 'min-w-0'
-              : 'w-full bg-slate-950/60 px-0.5 py-1.5 backdrop-blur-[1px]'
+              : 'w-full bg-slate-950/75 px-0.5 py-1.5'
           }`}
         >
           <span className="block whitespace-nowrap text-[10.5px] leading-none font-black uppercase tracking-[0.04em] text-purple-100 drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
@@ -541,7 +541,7 @@ const BoardTileCell = memo(function BoardTileCell({
         <div className="relative z-10 flex flex-1 items-center justify-center pt-1">
           <TaxStampIcon className="h-9 w-9 drop-shadow-[0_3px_6px_rgba(0,0,0,0.65)] sm:h-11 sm:w-11" />
         </div>
-        <div className="relative z-10 w-full bg-slate-950/65 px-0.5 py-1.5 backdrop-blur-[1px]">
+        <div className="relative z-10 w-full bg-slate-950/78 px-0.5 py-1.5">
           <div className="text-[10.5px] leading-none font-black uppercase tracking-[0.05em] text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)] sm:text-[11.5px]">
             THUẾ
           </div>
@@ -760,6 +760,44 @@ const BoardTileCell = memo(function BoardTileCell({
       </div>
     </button>
   );
+}, (prev, next) => {
+  if (
+    prev.tile !== next.tile ||
+    prev.isFlashing !== next.isFlashing ||
+    prev.isNewlyBuilt !== next.isNewlyBuilt ||
+    prev.matchPointWarning?.playerId !== next.matchPointWarning?.playerId ||
+    prev.matchPointWarning?.playerName !== next.matchPointWarning?.playerName ||
+    prev.matchPointWarning?.progressText !== next.matchPointWarning?.progressText ||
+    prev.matchPointWarning?.targetTileIndex !== next.matchPointWarning?.targetTileIndex ||
+    prev.onSelect !== next.onSelect ||
+    prev.registerTileRef !== next.registerTileRef
+  ) {
+    return false;
+  }
+
+  // Ô Trại Giam chỉ đổi khi có/không có người đang ở tù
+  if (prev.tile.kind === 'VISIT_JAIL') {
+    const prevHas = prev.players.some((p) => !p.isBankrupt && p.inJail);
+    const nextHas = next.players.some((p) => !p.isBankrupt && p.inJail);
+    if (prevHas !== nextHas) return false;
+  }
+
+  // Ô Sân Bay chỉ đổi khi tên điểm đến đổi
+  if (prev.tile.kind === 'AIRPORT' && prev.tile.currentDestinationTileIndex !== undefined) {
+    const destIdx = prev.tile.currentDestinationTileIndex;
+    if (prev.allTiles[destIdx]?.name !== next.allTiles[destIdx]?.name) {
+      return false;
+    }
+  }
+
+  // Ô Đất chỉ cần so trạng thái đủ bộ cùng nhóm màu (hasMonopoly) khi nhóm màu có thay đổi chủ sở hữu
+  if (prev.tile.kind === 'PROPERTY' && prev.tile.ownerId && prev.tile.colorGroup !== undefined) {
+    const prevMono = playerOwnsFullColorGroup(prev.allTiles, prev.tile.ownerId, prev.tile.colorGroup);
+    const nextMono = playerOwnsFullColorGroup(next.allTiles, prev.tile.ownerId, prev.tile.colorGroup);
+    if (prevMono !== nextMono) return false;
+  }
+
+  return true;
 });
 
 /** Hiển thị số dư tiền chạy số mượt mà (rolling counter cập nhật thẳng textContent — 0 React re-render 60fps!) */
@@ -850,13 +888,17 @@ function BoardVfxLayer({
         <div
           key={pop.id}
           style={{ left: 0, top: 0, transform: `translate3d(${pop.x}px, ${pop.y}px, 0) translate(-50%, -50%)` }}
-          className={`absolute animate-bounce rounded-full border px-2.5 py-1 text-xs font-black shadow-xl ${
-            pop.positive
-              ? 'border-emerald-200/80 bg-emerald-600/95 text-white'
-              : 'border-rose-200/80 bg-rose-600/95 text-white'
-          }`}
+          className="absolute"
         >
-          {pop.label}
+          <div
+            className={`animate-bounce whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-black shadow-xl ${
+              pop.positive
+                ? 'border-emerald-200/80 bg-emerald-600/95 text-white'
+                : 'border-rose-200/80 bg-rose-600/95 text-white'
+            }`}
+          >
+            {pop.label}
+          </div>
         </div>
       ))}
     </div>
@@ -974,7 +1016,6 @@ export function GameBoardView({
   const mobileBankAnchorRef = useRef<HTMLDivElement | null>(null);
   const chanceDeckRef = useRef<HTMLDivElement | null>(null);
   const fateDeckRef = useRef<HTMLDivElement | null>(null);
-  const playerRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pawnElRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const airportJetRef = useRef<HTMLDivElement | null>(null);
   const airportPuffRefs = useRef<(SVGCircleElement | null)[]>([]);
@@ -1090,6 +1131,7 @@ export function GameBoardView({
 
     return () => {
       mountedRef.current = false;
+      remoteQueueRef.current = [];
       cancelAnimationFrame(chargeRafRef.current);
       if (dramaBannerTimerRef.current) clearTimeout(dramaBannerTimerRef.current);
       controller.dispose();
@@ -1374,9 +1416,44 @@ export function GameBoardView({
       // Đẩy 1 object duy nhất sang CashTransferOverlay (tự chạy RAF DOM ref + translate3d -> 0 React re-render trên GameBoardView!)
       await new Promise<void>((resolve) => {
         if (!mountedRef.current) {
+          onArrive();
           resolve();
           return;
         }
+        let settled = false;
+        let arrived = false;
+        const triggerArriveOnce = () => {
+          if (arrived) return;
+          arrived = true;
+          if (!mountedRef.current) return;
+          if (toId === 'BANK') {
+            triggerBankPulse('in');
+            showTransientBankNote(`Thu +${formatShortVnd(absAmount)}`, 'in');
+          } else {
+            triggerPawnReaction(toId, 'celebrate');
+            if (fromId !== 'BANK') {
+              gameAudio.playReceiveMoney();
+            }
+          }
+          spawnShockwave(
+            end.x,
+            end.y,
+            tone === 'from-bank' ? '#34D399' : tone === 'player-to-player' ? '#38BDF8' : '#FBBF24',
+          );
+          onArrive();
+        };
+        const finishTransferOnce = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(safetyTimer);
+          triggerArriveOnce();
+          if (mountedRef.current) {
+            setCashTransfers((prev) => prev.filter((tr) => tr.id !== id));
+          }
+          resolve();
+        };
+        const safetyTimer = setTimeout(finishTransferOnce, durationMs + 700);
+
         const transferSpec: ActiveCashTransfer = {
           id,
           startX: start.x,
@@ -1392,30 +1469,8 @@ export function GameBoardView({
           reasonText: cleanedReason,
           durationMs,
           items,
-          onArrive: () => {
-            if (!mountedRef.current) return;
-            if (toId === 'BANK') {
-              triggerBankPulse('in');
-              showTransientBankNote(`Thu +${formatShortVnd(absAmount)}`, 'in');
-            } else {
-              triggerPawnReaction(toId, 'celebrate');
-              if (fromId !== 'BANK') {
-                gameAudio.playReceiveMoney();
-              }
-            }
-            spawnShockwave(
-              end.x,
-              end.y,
-              tone === 'from-bank' ? '#34D399' : tone === 'player-to-player' ? '#38BDF8' : '#FBBF24',
-            );
-            onArrive();
-          },
-          onComplete: () => {
-            if (mountedRef.current) {
-              setCashTransfers((prev) => prev.filter((tr) => tr.id !== id));
-            }
-            resolve();
-          },
+          onArrive: triggerArriveOnce,
+          onComplete: finishTransferOnce,
         };
         setCashTransfers((prev) => [...prev, transferSpec]);
       });
@@ -1447,88 +1502,114 @@ export function GameBoardView({
     ) => {
       let fromIdx = startIndex;
       const stepMs = path.length > 8 ? 155 : 200;
+      const initialPawnEl = pawnElRefs.current[playerId];
+      const savedZIndex = initialPawnEl?.style.zIndex ?? '';
+      const savedTransform = initialPawnEl?.style.transform ?? '';
+      const finalIdx = path[path.length - 1] ?? startIndex;
 
-      for (let i = 0; i < path.length; i += 1) {
-        const toIdx = path[i];
-        const p0 = getTileCenter(fromIdx);
-        const p1 = getTileCenter(toIdx);
-        const dirSign = p1.x >= p0.x ? 1 : -1;
+      try {
+        for (let i = 0; i < path.length; i += 1) {
+          const toIdx = path[i];
+          const p0 = getTileCenter(fromIdx);
+          const p1 = getTileCenter(toIdx);
+          const dirSign = p1.x >= p0.x ? 1 : -1;
 
-        gameAudio.playPawnHop(i, backwards, charId);
-        spawnTrailSpark(p0.x, p0.y, landHex);
+          gameAudio.playPawnHop(i, backwards, charId);
+          spawnTrailSpark(p0.x, p0.y, landHex);
 
-        await new Promise<void>((resolve) => {
-          const tStart = performance.now();
-          const tick = (now: number) => {
-            const t = Math.min(1, (now - tStart) / stepMs);
-            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-            const x = p0.x + (p1.x - p0.x) * ease;
-            const y = p0.y + (p1.y - p0.y) * ease;
-            const liftY = -Math.sin(t * Math.PI) * 34;
-
-            let scaleX = 1;
-            let scaleY = 1;
-            let tiltDeg = 0;
-            if (t < 0.16) {
-              const s = t / 0.16;
-              scaleX = 1 + 0.18 * s;
-              scaleY = 1 - 0.18 * s;
-            } else if (t < 0.84) {
-              const air = Math.sin(((t - 0.16) / 0.68) * Math.PI);
-              scaleX = 1 - 0.12 * air;
-              scaleY = 1 + 0.18 * air;
-              tiltDeg = dirSign * 11 * air;
-            } else {
-              const l = Math.sin(((t - 0.84) / 0.16) * Math.PI);
-              scaleX = 1 + 0.2 * l;
-              scaleY = 1 - 0.2 * l;
-            }
-
-            const currentAnim: ActivePawnAnim = {
-              playerId,
-              x,
-              y,
-              liftY,
-              scaleX,
-              scaleY,
-              tiltDeg,
-            };
-            livePawnOverrideRef.current = currentAnim;
-
-            const pawnEl = pawnElRefs.current[playerId];
-            if (pawnEl) {
-              pawnEl.style.zIndex = '45';
-              pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
-            } else if (mountedRef.current) {
-              setActivePawnAnim(currentAnim);
-            }
-
-            if (t < 1 && mountedRef.current) {
-              requestAnimationFrame(tick);
-            } else {
+          await new Promise<void>((resolve) => {
+            const tStart = performance.now();
+            let rafId = 0;
+            let settled = false;
+            const finishStep = () => {
+              if (settled) return;
+              settled = true;
+              cancelAnimationFrame(rafId);
+              clearTimeout(safetyTimer);
               resolve();
-            }
-          };
-          requestAnimationFrame(tick);
-        });
+            };
+            const safetyTimer = setTimeout(finishStep, stepMs + 420);
 
-        if (mountedRef.current) {
-          setFlashingTileIdx(toIdx);
-          spawnShockwave(p1.x, p1.y, landHex);
+            const tick = (now: number) => {
+              if (settled) return;
+              const t = Math.min(1, (now - tStart) / stepMs);
+              const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+              const x = p0.x + (p1.x - p0.x) * ease;
+              const y = p0.y + (p1.y - p0.y) * ease;
+              const liftY = -Math.sin(t * Math.PI) * 34;
+
+              let scaleX = 1;
+              let scaleY = 1;
+              let tiltDeg = 0;
+              if (t < 0.16) {
+                const s = t / 0.16;
+                scaleX = 1 + 0.18 * s;
+                scaleY = 1 - 0.18 * s;
+              } else if (t < 0.84) {
+                const air = Math.sin(((t - 0.16) / 0.68) * Math.PI);
+                scaleX = 1 - 0.12 * air;
+                scaleY = 1 + 0.18 * air;
+                tiltDeg = dirSign * 11 * air;
+              } else {
+                const l = Math.sin(((t - 0.84) / 0.16) * Math.PI);
+                scaleX = 1 + 0.2 * l;
+                scaleY = 1 - 0.2 * l;
+              }
+
+              const currentAnim: ActivePawnAnim = {
+                playerId,
+                x,
+                y,
+                liftY,
+                scaleX,
+                scaleY,
+                tiltDeg,
+              };
+              livePawnOverrideRef.current = currentAnim;
+
+              const pawnEl = pawnElRefs.current[playerId];
+              if (pawnEl) {
+                pawnEl.style.zIndex = '45';
+                pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg) scale(${scaleX}, ${scaleY})`;
+              } else if (mountedRef.current) {
+                setActivePawnAnim(currentAnim);
+              }
+
+              if (t < 1 && mountedRef.current) {
+                rafId = requestAnimationFrame(tick);
+              } else {
+                finishStep();
+              }
+            };
+            rafId = requestAnimationFrame(tick);
+          });
+
+          if (mountedRef.current) {
+            setFlashingTileIdx(toIdx);
+            spawnShockwave(p1.x, p1.y, landHex);
+          }
+          fromIdx = toIdx;
         }
-        fromIdx = toIdx;
-      }
-
-      livePawnOverrideRef.current = null;
-      if (mountedRef.current) {
-        const finalIdx = path[path.length - 1] ?? startIndex;
+      } finally {
+        livePawnOverrideRef.current = null;
         const pFinal = getTileCenter(finalIdx);
-        setActivePawnAnim(null);
-        setFlashingTileIdx(finalIdx);
-        spawnShockwave(pFinal.x, pFinal.y, landHex);
-        setTimeout(() => {
-          if (mountedRef.current) setFlashingTileIdx(null);
-        }, 320);
+        const finalPawnEl = pawnElRefs.current[playerId];
+        if (finalPawnEl) {
+          finalPawnEl.style.zIndex = savedZIndex;
+          if (finalIdx === startIndex && savedTransform) {
+            finalPawnEl.style.transform = savedTransform;
+          } else {
+            finalPawnEl.style.transform = `translate3d(${pFinal.x}px, ${pFinal.y}px, 0) translate(-50%, -56%) rotate(0deg) scale(1, 1)`;
+          }
+        }
+        if (mountedRef.current) {
+          setActivePawnAnim(null);
+          setFlashingTileIdx(finalIdx);
+          spawnShockwave(pFinal.x, pFinal.y, landHex);
+          setTimeout(() => {
+            if (mountedRef.current) setFlashingTileIdx(null);
+          }, 320);
+        }
       }
     },
     [getTileCenter, spawnShockwave, spawnTrailSpark],
@@ -1550,6 +1631,9 @@ export function GameBoardView({
       const midX = stageW * 0.5;
       const midY = stageH * 0.44;
       const dur = 1650;
+      const initialPawnEl = pawnElRefs.current[playerId];
+      const savedZIndex = initialPawnEl?.style.zIndex ?? '';
+      const savedTransform = initialPawnEl?.style.transform ?? '';
 
       // Mount lớp Sân Bay ĐÚNG 1 LẦN duy nhất, sau đó điều khiển máy bay & vệt mây bằng DOM ref trong RAF!
       if (mountedRef.current) {
@@ -1565,82 +1649,104 @@ export function GameBoardView({
         });
       }
 
-      await new Promise<void>((resolve) => {
-        const tStart = performance.now();
-        const puffs: { x: number; y: number; opacity: number }[] = [];
-
-        const tick = (now: number) => {
-          const t = Math.min(1, (now - tStart) / dur);
-          const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-          const u = 1 - ease;
-          const x = u * u * p0.x + 2 * u * ease * midX + ease * ease * p1.x;
-          const y = u * u * p0.y + 2 * u * ease * midY + ease * ease * p1.y;
-          const dx = 2 * u * (midX - p0.x) + 2 * ease * (p1.x - midX);
-          const dy = 2 * u * (midY - p0.y) + 2 * ease * (p1.y - midY);
-          const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
-
-          if (Math.random() < 0.55 && t < 0.92) {
-            puffs.push({ x, y, opacity: 0.9 });
-            if (puffs.length > 18) puffs.shift();
-          }
-          for (const pf of puffs) {
-            pf.opacity = Math.max(0, pf.opacity - 0.025);
-          }
-
-          const liftY = -Math.sin(t * Math.PI) * 32;
-          livePawnOverrideRef.current = {
-            playerId,
-            x,
-            y,
-            liftY,
-            scaleX: 0.55,
-            scaleY: 0.55,
-            tiltDeg: 0,
-          };
-          const pawnEl = pawnElRefs.current[playerId];
-          if (pawnEl) {
-            pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) scale(0.55, 0.55)`;
-          }
-
-          const jetEl = airportJetRef.current;
-          if (jetEl) {
-            const jetScale = 0.58 + Math.sin(t * Math.PI) * 0.62;
-            jetEl.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) rotate(${angleDeg}deg) scale(${jetScale})`;
-          }
-
-          for (let i = 0; i < 18; i += 1) {
-            const c = airportPuffRefs.current[i];
-            if (!c) continue;
-            const pf = puffs[i];
-            if (pf && pf.opacity > 0.01) {
-              c.setAttribute('cx', String(pf.x));
-              c.setAttribute('cy', String(pf.y));
-              c.setAttribute('r', String(7 + i * 0.45));
-              c.setAttribute('opacity', String(pf.opacity * 0.68));
-            } else {
-              c.setAttribute('opacity', '0');
-            }
-          }
-
-          if (t < 1 && mountedRef.current) {
-            requestAnimationFrame(tick);
-          } else {
+      try {
+        await new Promise<void>((resolve) => {
+          const tStart = performance.now();
+          const puffs: { x: number; y: number; opacity: number }[] = [];
+          let rafId = 0;
+          let settled = false;
+          const finishFlight = () => {
+            if (settled) return;
+            settled = true;
+            cancelAnimationFrame(rafId);
+            clearTimeout(safetyTimer);
             resolve();
-          }
-        };
-        requestAnimationFrame(tick);
-      });
+          };
+          const safetyTimer = setTimeout(finishFlight, dur + 500);
 
-      livePawnOverrideRef.current = null;
-      if (mountedRef.current) {
-        setAirportFlight(null);
-        setActivePawnAnim(null);
-        setFlashingTileIdx(toIndex);
-        spawnShockwave(p1.x, p1.y, landHex);
-        setTimeout(() => {
-          if (mountedRef.current) setFlashingTileIdx(null);
-        }, 420);
+          const tick = (now: number) => {
+            if (settled) return;
+            const t = Math.min(1, (now - tStart) / dur);
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            const u = 1 - ease;
+            const x = u * u * p0.x + 2 * u * ease * midX + ease * ease * p1.x;
+            const y = u * u * p0.y + 2 * u * ease * midY + ease * ease * p1.y;
+            const dx = 2 * u * (midX - p0.x) + 2 * ease * (p1.x - midX);
+            const dy = 2 * u * (midY - p0.y) + 2 * ease * (p1.y - midY);
+            const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+
+            if (Math.random() < 0.55 && t < 0.92) {
+              puffs.push({ x, y, opacity: 0.9 });
+              if (puffs.length > 18) puffs.shift();
+            }
+            for (const pf of puffs) {
+              pf.opacity = Math.max(0, pf.opacity - 0.025);
+            }
+
+            const liftY = -Math.sin(t * Math.PI) * 32;
+            livePawnOverrideRef.current = {
+              playerId,
+              x,
+              y,
+              liftY,
+              scaleX: 0.55,
+              scaleY: 0.55,
+              tiltDeg: 0,
+            };
+            const pawnEl = pawnElRefs.current[playerId];
+            if (pawnEl) {
+              pawnEl.style.zIndex = '45';
+              pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) scale(0.55, 0.55)`;
+            }
+
+            const jetEl = airportJetRef.current;
+            if (jetEl) {
+              const jetScale = 0.58 + Math.sin(t * Math.PI) * 0.62;
+              jetEl.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) rotate(${angleDeg}deg) scale(${jetScale})`;
+            }
+
+            for (let i = 0; i < 18; i += 1) {
+              const c = airportPuffRefs.current[i];
+              if (!c) continue;
+              const pf = puffs[i];
+              if (pf && pf.opacity > 0.01) {
+                c.setAttribute('cx', String(pf.x));
+                c.setAttribute('cy', String(pf.y));
+                c.setAttribute('r', String(7 + i * 0.45));
+                c.setAttribute('opacity', String(pf.opacity * 0.68));
+              } else {
+                c.setAttribute('opacity', '0');
+              }
+            }
+
+            if (t < 1 && mountedRef.current) {
+              rafId = requestAnimationFrame(tick);
+            } else {
+              finishFlight();
+            }
+          };
+          rafId = requestAnimationFrame(tick);
+        });
+      } finally {
+        livePawnOverrideRef.current = null;
+        const finalPawnEl = pawnElRefs.current[playerId];
+        if (finalPawnEl) {
+          finalPawnEl.style.zIndex = savedZIndex;
+          if (toIndex === fromIndex && savedTransform) {
+            finalPawnEl.style.transform = savedTransform;
+          } else {
+            finalPawnEl.style.transform = `translate3d(${p1.x}px, ${p1.y}px, 0) translate(-50%, -56%) rotate(0deg) scale(1, 1)`;
+          }
+        }
+        if (mountedRef.current) {
+          setAirportFlight(null);
+          setActivePawnAnim(null);
+          setFlashingTileIdx(toIndex);
+          spawnShockwave(p1.x, p1.y, landHex);
+          setTimeout(() => {
+            if (mountedRef.current) setFlashingTileIdx(null);
+          }, 420);
+        }
       }
     },
     [getTileCenter, spawnShockwave, stageW, stageH],
@@ -1653,48 +1759,74 @@ export function GameBoardView({
       const p0 = getTileCenter(fromIndex);
       const p1 = getTileCenter(JAIL_TILE_INDEX);
       const dur = fromIndex === JAIL_TILE_INDEX ? 260 : 620;
+      const initialPawnEl = pawnElRefs.current[playerId];
+      const savedZIndex = initialPawnEl?.style.zIndex ?? '';
+      const savedTransform = initialPawnEl?.style.transform ?? '';
 
-      await new Promise<void>((resolve) => {
-        const tStart = performance.now();
-        const tick = (now: number) => {
-          const t = Math.min(1, (now - tStart) / dur);
-          const ease = 1 - Math.pow(1 - t, 3);
-          const x = p0.x + (p1.x - p0.x) * ease;
-          const y = p0.y + (p1.y - p0.y) * ease;
-          const liftY = -Math.sin(t * Math.PI) * 46;
-          const tiltDeg = (1 - t) * 20;
-          livePawnOverrideRef.current = {
-            playerId,
-            x,
-            y,
-            liftY,
-            scaleX: 1,
-            scaleY: 1,
-            tiltDeg,
+      try {
+        await new Promise<void>((resolve) => {
+          const tStart = performance.now();
+          let rafId = 0;
+          let settled = false;
+          const finishJail = () => {
+            if (settled) return;
+            settled = true;
+            cancelAnimationFrame(rafId);
+            clearTimeout(safetyTimer);
+            resolve();
           };
-          const pawnEl = pawnElRefs.current[playerId];
-          if (pawnEl) {
-            pawnEl.style.zIndex = '45';
-            pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg)`;
-          } else if (mountedRef.current) {
-            setActivePawnAnim(livePawnOverrideRef.current);
-          }
-          if (t < 1 && mountedRef.current) requestAnimationFrame(tick);
-          else resolve();
-        };
-        requestAnimationFrame(tick);
-      });
+          const safetyTimer = setTimeout(finishJail, dur + 450);
 
-      livePawnOverrideRef.current = null;
-      if (mountedRef.current) {
-        setActivePawnAnim(null);
-        triggerBoardShake();
-        const slamId = ++fxUid;
-        setJailSlam({ id: slamId, x: p1.x, y: p1.y });
-        spawnShockwave(p1.x, p1.y, '#EF4444');
-        setTimeout(() => {
-          if (mountedRef.current) setJailSlam((cur) => (cur?.id === slamId ? null : cur));
-        }, 800);
+          const tick = (now: number) => {
+            if (settled) return;
+            const t = Math.min(1, (now - tStart) / dur);
+            const ease = 1 - Math.pow(1 - t, 3);
+            const x = p0.x + (p1.x - p0.x) * ease;
+            const y = p0.y + (p1.y - p0.y) * ease;
+            const liftY = -Math.sin(t * Math.PI) * 46;
+            const tiltDeg = (1 - t) * 20;
+            livePawnOverrideRef.current = {
+              playerId,
+              x,
+              y,
+              liftY,
+              scaleX: 1,
+              scaleY: 1,
+              tiltDeg,
+            };
+            const pawnEl = pawnElRefs.current[playerId];
+            if (pawnEl) {
+              pawnEl.style.zIndex = '45';
+              pawnEl.style.transform = `translate3d(${x}px, ${y + liftY}px, 0) translate(-50%, -56%) rotate(${tiltDeg}deg)`;
+            } else if (mountedRef.current) {
+              setActivePawnAnim(livePawnOverrideRef.current);
+            }
+            if (t < 1 && mountedRef.current) rafId = requestAnimationFrame(tick);
+            else finishJail();
+          };
+          rafId = requestAnimationFrame(tick);
+        });
+      } finally {
+        livePawnOverrideRef.current = null;
+        const finalPawnEl = pawnElRefs.current[playerId];
+        if (finalPawnEl) {
+          finalPawnEl.style.zIndex = savedZIndex;
+          if (fromIndex === JAIL_TILE_INDEX && savedTransform) {
+            finalPawnEl.style.transform = savedTransform;
+          } else {
+            finalPawnEl.style.transform = `translate3d(${p1.x}px, ${p1.y}px, 0) translate(-50%, -56%) rotate(0deg) scale(1, 1)`;
+          }
+        }
+        if (mountedRef.current) {
+          setActivePawnAnim(null);
+          triggerBoardShake();
+          const slamId = ++fxUid;
+          setJailSlam({ id: slamId, x: p1.x, y: p1.y });
+          spawnShockwave(p1.x, p1.y, '#EF4444');
+          setTimeout(() => {
+            if (mountedRef.current) setJailSlam((cur) => (cur?.id === slamId ? null : cur));
+          }, 800);
+        }
       }
     },
     [getTileCenter, spawnShockwave, triggerBoardShake],
@@ -1726,343 +1858,377 @@ export function GameBoardView({
         resultingState?: GameState;
         deckSync?: { chanceDeck?: string[]; fateDeck?: string[] };
       },
-    ) => {
-      if (isAnimatingRef.current) return;
+    ): Promise<boolean> => {
+      if (isAnimatingRef.current) return false;
+      const prevState = latestStateRef.current;
+      // Nếu thẻ Cơ Hội/Khí Vận đã được đóng bởi sự kiện trước đó, bỏ qua êm để tránh gửi trùng CONFIRM_CARD
+      if (action.type === 'CONFIRM_CARD' && prevState.phase !== 'CARD_REVEAL') {
+        if (remoteQueueRef.current.length === 0 && mountedRef.current) {
+          setIsAnimating(false);
+        }
+        return true;
+      }
+
       isAnimatingRef.current = true;
       setBotThought(null);
       setRemoteCharge(null);
       setIsAnimating(true);
 
-      const prevState = latestStateRef.current;
-      const online = onlineContextRef.current;
+      let finalNextState = prevState;
 
-      // Trong chế độ Online, người khởi phát nước đi tự quay số xúc xắc trước để phát y hệt cho mọi máy
-      // (Người chơi thật dùng Xúc Xắc Thông Minh Gói A + bonus tụ lực Đổ Đôi; Máy AI giữ random 100%)
-      let resolvedAction: GameAction = action;
-      if (
-        (action.type === 'ROLL_DICE' || action.type === 'ROLL_FOR_JAIL') &&
-        !action.diceValues
-      ) {
-        if (online && !remoteOverride) {
-          const actingPlayer = prevState.players[prevState.currentPlayerIndex];
-          const isBotRoll = Boolean(actingPlayer?.isBot);
-          const diceValues = isBotRoll
-            ? Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6))
-            : rollSmartHumanDice(prevState, actingPlayer, {
-                rollPower,
-                forJail: action.type === 'ROLL_FOR_JAIL',
-              });
-          resolvedAction = { ...action, diceValues, rollPower };
-        } else if (!online) {
-          resolvedAction = { ...action, rollPower };
-        }
-      }
+      try {
+        const online = onlineContextRef.current;
 
-      const { state: reducedState, events } = reduceGameAction(prevState, resolvedAction);
-      const nextState = remoteOverride?.resultingState
-        ? remoteOverride.resultingState
-        : remoteOverride?.deckSync
-          ? {
-              ...reducedState,
-              chanceDeck: remoteOverride.deckSync.chanceDeck ?? reducedState.chanceDeck,
-              fateDeck: remoteOverride.deckSync.fateDeck ?? reducedState.fateDeck,
-            }
-          : reducedState;
-      latestStateRef.current = nextState;
-
-      // Phát tán ngay nước đi lên phòng Online (P2P DataChannel + Singapore Redis) để mọi người cùng xem hoạt ảnh đồng bộ
-      if (online && !remoteOverride) {
-        online.onCommitLocalAction(resolvedAction, rollPower, nextState);
-        // Đệm đồng bộ ~60ms trên máy người vừa tung để gói tin kịp sang điện thoại/máy bạn -> CẢ 2 MÀN HÌNH CÙNG RƠI XÚC XẮC 3D ĐÚNG 1 NHỊP!
-        if (events.some((e) => e.type === 'DICE_ROLLED')) {
-          await new Promise((r) => setTimeout(r, 60));
-        }
-      }
-
-      const prevPositions = new Map<string, number>(prevState.players.map((p) => [p.id, p.position]));
-      const liveCashMap = new Map<string, number>(prevState.players.map((p) => [p.id, p.cash]));
-
-      // Sắp xếp lại: nếu có thưởng Khởi Hành (+3M) ngay trước PAWN_STEP, cho nhân vật nhảy xong rồi Ngân hàng mới bắn +3M vào tay
-      const orderedEvents: GameAnimEvent[] = [];
-      for (let i = 0; i < events.length; i += 1) {
-        const cur = events[i];
-        const nxt = events[i + 1];
+        // Trong chế độ Online, người khởi phát nước đi tự quay số xúc xắc trước để phát y hệt cho mọi máy
+        // (Người chơi thật dùng Xúc Xắc Thông Minh Gói A + bonus tụ lực Đổ Đôi; Máy AI giữ random 100%)
+        let resolvedAction: GameAction = action;
         if (
-          cur.type === 'CASH_CHANGE' &&
-          cur.delta > 0 &&
-          cur.counterpartyId === 'BANK' &&
-          cur.label.includes('Khởi Hành') &&
-          nxt?.type === 'PAWN_STEP' &&
-          nxt.playerId === cur.playerId
+          (action.type === 'ROLL_DICE' || action.type === 'ROLL_FOR_JAIL') &&
+          !action.diceValues
         ) {
-          orderedEvents.push(nxt, cur);
-          i += 1;
-        } else {
-          orderedEvents.push(cur);
+          if (online && !remoteOverride) {
+            const actingPlayer = prevState.players[prevState.currentPlayerIndex];
+            const actingOnlineHuman = online.snapshot.humans.find((h) => h.seatId === actingPlayer?.id);
+            const isBotRoll = Boolean(actingPlayer?.isBot || actingOnlineHuman?.botTakeover);
+            const diceValues = isBotRoll
+              ? Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6))
+              : rollSmartHumanDice(prevState, actingPlayer, {
+                  rollPower,
+                  forJail: action.type === 'ROLL_FOR_JAIL',
+                });
+            resolvedAction = { ...action, diceValues, rollPower };
+          } else if (!online) {
+            resolvedAction = { ...action, rollPower };
+          }
         }
-      }
 
-      const applyCashDeltaToDisplay = (playerId: string, delta: number) => {
-        const updatedCash = Math.max(0, (liveCashMap.get(playerId) ?? 0) + delta);
-        liveCashMap.set(playerId, updatedCash);
-        triggerRowFlash(playerId, delta >= 0 ? 'gain' : 'loss');
-        setDisplayState((prev) => ({
-          ...prev,
-          players: prev.players.map((pl) =>
-            pl.id === playerId ? { ...pl, cash: updatedCash } : pl,
-          ),
-        }));
-      };
-
-      for (let i = 0; i < orderedEvents.length; i += 1) {
-        if (!mountedRef.current) return;
-        const ev = orderedEvents[i];
-
-        switch (ev.type) {
-          case 'DICE_ROLLED':
-            if (sceneRef.current) {
-              await sceneRef.current.animateDiceRoll(ev.values, ev.isDouble, rollPower);
-            } else {
-              gameAudio.playDiceShake(rollPower);
-              await new Promise((r) => setTimeout(r, 450));
-            }
-            if (mountedRef.current) {
-              setLiveDice({ values: ev.values, isDouble: ev.isDouble });
-              if (ev.isDouble) {
-                triggerBoardShake();
-                const rollerBefore = prevState.players[prevState.currentPlayerIndex];
-                const rollerAfter = nextState.players[prevState.currentPlayerIndex];
-                if (
-                  nextState.diceCount === 2 &&
-                  rollerBefore &&
-                  !rollerBefore.inJail &&
-                  rollerAfter &&
-                  !rollerAfter.inJail &&
-                  rollerAfter.consecutiveDoubles === 2
-                ) {
-                  showDramaBanner(
-                    `⚠️ ${rollerAfter.name.toUpperCase()} ĐÃ ĐỔ ĐÔI 2/3 — THÊM 1 LẦN ĐỔ ĐÔI NỮA SẼ VÔ TÙ!`,
-                    'danger',
-                  );
-                }
+        const { state: reducedState, events } = reduceGameAction(prevState, resolvedAction);
+        const nextState = remoteOverride?.resultingState
+          ? remoteOverride.resultingState
+          : remoteOverride?.deckSync
+            ? {
+                ...reducedState,
+                chanceDeck: remoteOverride.deckSync.chanceDeck ?? reducedState.chanceDeck,
+                fateDeck: remoteOverride.deckSync.fateDeck ?? reducedState.fateDeck,
               }
-              // Hiển thị rõ số điểm quay được (~0.85s) trước khi nhân vật bắt đầu nhảy di chuyển
-              await new Promise((r) => setTimeout(r, 850));
+            : reducedState;
+        finalNextState = nextState;
+        latestStateRef.current = nextState;
+
+        // Phát tán ngay nước đi lên phòng Online (Ably WebSocket / dự phòng Redis) để mọi người cùng xem hoạt ảnh đồng bộ
+        if (online && !remoteOverride) {
+          online.onCommitLocalAction(resolvedAction, rollPower, nextState);
+          // Đệm đồng bộ ~60ms trên máy người vừa tung để gói tin kịp sang điện thoại/máy bạn -> CẢ 2 MÀN HÌNH CÙNG RƠI XÚC XẮC 3D ĐÚNG 1 NHỊP!
+          if (events.some((e) => e.type === 'DICE_ROLLED')) {
+            await new Promise((r) => setTimeout(r, 60));
+          }
+        }
+
+        const prevPositions = new Map<string, number>(prevState.players.map((p) => [p.id, p.position]));
+        const liveCashMap = new Map<string, number>(prevState.players.map((p) => [p.id, p.cash]));
+
+        // Sắp xếp lại: nếu có thưởng Khởi Hành (+3M) ngay trước PAWN_STEP, cho nhân vật nhảy xong rồi Ngân hàng mới bắn +3M vào tay
+        const orderedEvents: GameAnimEvent[] = [];
+        for (let i = 0; i < events.length; i += 1) {
+          const cur = events[i];
+          const nxt = events[i + 1];
+          if (
+            cur.type === 'CASH_CHANGE' &&
+            cur.delta > 0 &&
+            cur.counterpartyId === 'BANK' &&
+            cur.label.includes('Khởi Hành') &&
+            nxt?.type === 'PAWN_STEP' &&
+            nxt.playerId === cur.playerId
+          ) {
+            orderedEvents.push(nxt, cur);
+            i += 1;
+          } else {
+            orderedEvents.push(cur);
+          }
+        }
+
+        const applyCashDeltaToDisplay = (playerId: string, delta: number) => {
+          const updatedCash = Math.max(0, (liveCashMap.get(playerId) ?? 0) + delta);
+          liveCashMap.set(playerId, updatedCash);
+          triggerRowFlash(playerId, delta >= 0 ? 'gain' : 'loss');
+          setDisplayState((prev) => ({
+            ...prev,
+            players: prev.players.map((pl) =>
+              pl.id === playerId ? { ...pl, cash: updatedCash } : pl,
+            ),
+          }));
+        };
+
+        for (let i = 0; i < orderedEvents.length; i += 1) {
+          if (!mountedRef.current) return true;
+          const ev = orderedEvents[i];
+
+          switch (ev.type) {
+            case 'DICE_ROLLED':
+              if (sceneRef.current) {
+                await sceneRef.current.animateDiceRoll(ev.values, ev.isDouble, rollPower);
+              } else {
+                gameAudio.playDiceShake(rollPower);
+                await new Promise((r) => setTimeout(r, 450));
+              }
+              if (mountedRef.current) {
+                setLiveDice({ values: ev.values, isDouble: ev.isDouble });
+                if (ev.isDouble) {
+                  triggerBoardShake();
+                  const rollerBefore = prevState.players[prevState.currentPlayerIndex];
+                  const rollerAfter = nextState.players[prevState.currentPlayerIndex];
+                  if (
+                    nextState.diceCount === 2 &&
+                    rollerBefore &&
+                    !rollerBefore.inJail &&
+                    rollerAfter &&
+                    !rollerAfter.inJail &&
+                    rollerAfter.consecutiveDoubles === 2
+                  ) {
+                    showDramaBanner(
+                      `⚠️ ${rollerAfter.name.toUpperCase()} ĐÃ ĐỔ ĐÔI 2/3 — THÊM 1 LẦN ĐỔ ĐÔI NỮA SẼ VÔ TÙ!`,
+                      'danger',
+                    );
+                  }
+                }
+                // Hiển thị rõ số điểm quay được (~0.85s) trước khi nhân vật bắt đầu nhảy di chuyển
+                await new Promise((r) => setTimeout(r, 850));
+              }
+              break;
+
+            case 'PAWN_STEP': {
+              const mover = nextState.players.find((pl) => pl.id === ev.playerId);
+              const startIdx = prevPositions.get(ev.playerId) ?? 0;
+              await animateDomPawnPath(
+                ev.playerId,
+                startIdx,
+                ev.path,
+                ev.backwards,
+                mover?.landHex ?? '#FDE047',
+                mover?.characterId,
+              );
+              prevPositions.set(ev.playerId, ev.path[ev.path.length - 1] ?? startIdx);
+              setDisplayState((prev) => ({
+                ...prev,
+                players: prev.players.map((pl) =>
+                  pl.id === ev.playerId
+                    ? { ...pl, position: ev.path[ev.path.length - 1] ?? pl.position }
+                    : pl,
+                ),
+              }));
+              break;
             }
-            break;
 
-          case 'PAWN_STEP': {
-            const mover = nextState.players.find((pl) => pl.id === ev.playerId);
-            const startIdx = prevPositions.get(ev.playerId) ?? 0;
-            await animateDomPawnPath(
-              ev.playerId,
-              startIdx,
-              ev.path,
-              ev.backwards,
-              mover?.landHex ?? '#FDE047',
-              mover?.characterId,
-            );
-            prevPositions.set(ev.playerId, ev.path[ev.path.length - 1] ?? startIdx);
-            setDisplayState((prev) => ({
-              ...prev,
-              players: prev.players.map((pl) =>
-                pl.id === ev.playerId
-                  ? { ...pl, position: ev.path[ev.path.length - 1] ?? pl.position }
-                  : pl,
-              ),
-            }));
-            break;
-          }
+            case 'AIRPORT_FLY': {
+              const mover = nextState.players.find((pl) => pl.id === ev.playerId);
+              const destTile = nextState.tiles[ev.toIndex];
+              await animateDomAirportFlight(
+                ev.playerId,
+                mover?.name ?? 'Người chơi',
+                ev.fromIndex,
+                ev.toIndex,
+                destTile?.name ?? 'Điểm đến',
+                mover?.landHex ?? '#38BDF8',
+              );
+              prevPositions.set(ev.playerId, ev.toIndex);
+              setDisplayState((prev) => ({
+                ...prev,
+                players: prev.players.map((pl) =>
+                  pl.id === ev.playerId ? { ...pl, position: ev.toIndex } : pl,
+                ),
+              }));
+              break;
+            }
 
-          case 'AIRPORT_FLY': {
-            const mover = nextState.players.find((pl) => pl.id === ev.playerId);
-            const destTile = nextState.tiles[ev.toIndex];
-            await animateDomAirportFlight(
-              ev.playerId,
-              mover?.name ?? 'Người chơi',
-              ev.fromIndex,
-              ev.toIndex,
-              destTile?.name ?? 'Điểm đến',
-              mover?.landHex ?? '#38BDF8',
-            );
-            prevPositions.set(ev.playerId, ev.toIndex);
-            setDisplayState((prev) => ({
-              ...prev,
-              players: prev.players.map((pl) =>
-                pl.id === ev.playerId ? { ...pl, position: ev.toIndex } : pl,
-              ),
-            }));
-            break;
-          }
+            case 'JAIL_LOCK':
+              await animateDomJailLock(ev.playerId, ev.fromIndex);
+              prevPositions.set(ev.playerId, JAIL_TILE_INDEX);
+              setDisplayState((prev) => ({
+                ...prev,
+                players: prev.players.map((pl) =>
+                  pl.id === ev.playerId ? { ...pl, position: JAIL_TILE_INDEX, inJail: true } : pl,
+                ),
+              }));
+              break;
 
-          case 'JAIL_LOCK':
-            await animateDomJailLock(ev.playerId, ev.fromIndex);
-            prevPositions.set(ev.playerId, JAIL_TILE_INDEX);
-            setDisplayState((prev) => ({
-              ...prev,
-              players: prev.players.map((pl) =>
-                pl.id === ev.playerId ? { ...pl, position: JAIL_TILE_INDEX, inJail: true } : pl,
-              ),
-            }));
-            break;
+            case 'JAIL_FREE':
+              gameAudio.playJailFree();
+              break;
 
-          case 'JAIL_FREE':
-            gameAudio.playJailFree();
-            break;
+            case 'CASH_CHANGE': {
+              if (ev.delta === 0) break;
+              const nextEv = orderedEvents[i + 1];
+              const isPlayerToPlayerPair =
+                ev.delta < 0 &&
+                ev.counterpartyId &&
+                ev.counterpartyId !== 'BANK' &&
+                nextEv?.type === 'CASH_CHANGE' &&
+                nextEv.playerId === ev.counterpartyId &&
+                nextEv.counterpartyId === ev.playerId &&
+                nextEv.delta === -ev.delta;
 
-          case 'CASH_CHANGE': {
-            if (ev.delta === 0) break;
-            const nextEv = orderedEvents[i + 1];
-            const isPlayerToPlayerPair =
-              ev.delta < 0 &&
-              ev.counterpartyId &&
-              ev.counterpartyId !== 'BANK' &&
-              nextEv?.type === 'CASH_CHANGE' &&
-              nextEv.playerId === ev.counterpartyId &&
-              nextEv.counterpartyId === ev.playerId &&
-              nextEv.delta === -ev.delta;
+              if (isPlayerToPlayerPair && nextEv.type === 'CASH_CHANGE') {
+                // Gộp cặp trả-nhận giữa 2 người chơi thành 1 đường bay tiền mượt từ người trả -> chủ đất
+                i += 1;
+                const payerId = ev.playerId;
+                const receiverId = nextEv.playerId;
+                const amt = Math.abs(ev.delta);
+                spawnBoardPopup(payerId, prevPositions, ev.delta, ev.label);
+                await animateCashTransfer({
+                  fromId: payerId,
+                  toId: receiverId,
+                  amount: amt,
+                  reasonLabel: ev.label,
+                  players: nextState.players,
+                  positionsMap: prevPositions,
+                  tiles: nextState.tiles,
+                  isPurchaseLike: false,
+                  onArrive: () => {
+                    applyCashDeltaToDisplay(payerId, -amt);
+                    applyCashDeltaToDisplay(receiverId, amt);
+                    spawnBoardPopup(receiverId, prevPositions, amt, nextEv.label);
+                  },
+                });
+                break;
+              }
 
-            if (isPlayerToPlayerPair && nextEv.type === 'CASH_CHANGE') {
-              // Gộp cặp trả-nhận giữa 2 người chơi thành 1 đường bay tiền mượt từ người trả -> chủ đất
-              i += 1;
-              const payerId = ev.playerId;
-              const receiverId = nextEv.playerId;
-              const amt = Math.abs(ev.delta);
-              spawnBoardPopup(payerId, prevPositions, ev.delta, ev.label);
+              const fromId: string | 'BANK' = ev.delta > 0 ? (ev.counterpartyId ?? 'BANK') : ev.playerId;
+              const toId: string | 'BANK' = ev.delta > 0 ? ev.playerId : (ev.counterpartyId ?? 'BANK');
+              const isPurchaseLike =
+                nextEv?.type === 'HOUSE_BUILT' ||
+                ev.label.includes('Mua') ||
+                ev.label.includes('Xây') ||
+                ev.label.includes('Cọc');
+
               await animateCashTransfer({
-                fromId: payerId,
-                toId: receiverId,
-                amount: amt,
+                fromId,
+                toId,
+                amount: Math.abs(ev.delta),
                 reasonLabel: ev.label,
                 players: nextState.players,
                 positionsMap: prevPositions,
                 tiles: nextState.tiles,
-                isPurchaseLike: false,
+                isPurchaseLike,
                 onArrive: () => {
-                  applyCashDeltaToDisplay(payerId, -amt);
-                  applyCashDeltaToDisplay(receiverId, amt);
-                  spawnBoardPopup(receiverId, prevPositions, amt, nextEv.label);
+                  applyCashDeltaToDisplay(ev.playerId, ev.delta);
+                  spawnBoardPopup(ev.playerId, prevPositions, ev.delta, ev.label);
                 },
               });
               break;
             }
 
-            const fromId: string | 'BANK' = ev.delta > 0 ? (ev.counterpartyId ?? 'BANK') : ev.playerId;
-            const toId: string | 'BANK' = ev.delta > 0 ? ev.playerId : (ev.counterpartyId ?? 'BANK');
-            const isPurchaseLike =
-              nextEv?.type === 'HOUSE_BUILT' ||
-              ev.label.includes('Mua') ||
-              ev.label.includes('Xây') ||
-              ev.label.includes('Cọc');
+            case 'CARD_DRAWN':
+              gameAudio.playCardDraw(ev.card.deck);
+              await animateCardDrawFromDeck(ev.card.deck);
+              break;
 
-            await animateCashTransfer({
-              fromId,
-              toId,
-              amount: Math.abs(ev.delta),
-              reasonLabel: ev.label,
-              players: nextState.players,
-              positionsMap: prevPositions,
-              tiles: nextState.tiles,
-              isPurchaseLike,
-              onArrive: () => {
-                applyCashDeltaToDisplay(ev.playerId, ev.delta);
-                spawnBoardPopup(ev.playerId, prevPositions, ev.delta, ev.label);
-              },
-            });
-            break;
-          }
+            case 'DECK_RESHUFFLED':
+              showDramaBanner(
+                `🔄 BỘ BÀI ${ev.deck === 'CHANCE' ? 'CƠ HỘI' : 'KHÍ VẬN'} ĐÃ XÁO MỚI NGẪU NHIÊN LẠI ĐỦ ${ev.count} LÁ!`,
+                'cyan',
+              );
+              break;
 
-          case 'CARD_DRAWN':
-            gameAudio.playCardDraw(ev.card.deck);
-            await animateCardDrawFromDeck(ev.card.deck);
-            break;
+            case 'MONOPOLY_COMPLETED':
+              gameAudio.playDoubleSparkle();
+              showDramaBanner(
+                `✨ ${ev.playerName.toUpperCase()} ĐỦ BỘ ${ev.groupName.toUpperCase()} · TIỀN THUÊ NHÂN ĐÔI (×2)!`,
+                'gold',
+              );
+              break;
 
-          case 'DECK_RESHUFFLED':
-            showDramaBanner(
-              `🔄 BỘ BÀI ${ev.deck === 'CHANCE' ? 'CƠ HỘI' : 'KHÍ VẬN'} ĐÃ XÁO MỚI NGẪU NHIÊN LẠI ĐỦ ${ev.count} LÁ!`,
-              'cyan',
-            );
-            break;
-
-          case 'MONOPOLY_COMPLETED':
-            gameAudio.playDoubleSparkle();
-            showDramaBanner(
-              `✨ ${ev.playerName.toUpperCase()} ĐỦ BỘ ${ev.groupName.toUpperCase()} · TIỀN THUÊ NHÂN ĐÔI (×2)!`,
-              'gold',
-            );
-            break;
-
-          case 'HOUSE_BUILT': {
-            gameAudio.playBuildOrBuy(ev.level);
-            // Cập nhật ngay màu đất & ngôi nhà mới mọc ngay sau khi tiền vừa bay vào Ngân hàng
-            const updatedTile = nextState.tiles[ev.tileIndex];
-            if (updatedTile) {
-              setDisplayState((prev) => ({
-                ...prev,
-                tiles: prev.tiles.map((t) => (t.index === ev.tileIndex ? updatedTile : t)),
-              }));
+            case 'HOUSE_BUILT': {
+              gameAudio.playBuildOrBuy(ev.level);
+              // Cập nhật ngay màu đất & ngôi nhà mới mọc ngay sau khi tiền vừa bay vào Ngân hàng
+              const updatedTile = nextState.tiles[ev.tileIndex];
+              if (updatedTile) {
+                setDisplayState((prev) => ({
+                  ...prev,
+                  tiles: prev.tiles.map((t) => (t.index === ev.tileIndex ? updatedTile : t)),
+                }));
+              }
+              const pos = getTileCenter(ev.tileIndex);
+              spawnShockwave(pos.x, pos.y, ev.level >= 5 ? '#FDE047' : ev.landHex);
+              spawnTrailSpark(pos.x - 10, pos.y - 8, '#FDE047');
+              spawnTrailSpark(pos.x + 10, pos.y - 10, '#FFFFFF');
+              setNewlyBuiltTileIdx(ev.tileIndex);
+              await new Promise((r) => setTimeout(r, 380));
+              if (mountedRef.current) {
+                setTimeout(() => {
+                  if (mountedRef.current) setNewlyBuiltTileIdx(null);
+                }, 340);
+              }
+              break;
             }
-            const pos = getTileCenter(ev.tileIndex);
-            spawnShockwave(pos.x, pos.y, ev.level >= 5 ? '#FDE047' : ev.landHex);
-            spawnTrailSpark(pos.x - 10, pos.y - 8, '#FDE047');
-            spawnTrailSpark(pos.x + 10, pos.y - 10, '#FFFFFF');
-            setNewlyBuiltTileIdx(ev.tileIndex);
-            await new Promise((r) => setTimeout(r, 380));
-            if (mountedRef.current) {
-              setTimeout(() => {
-                if (mountedRef.current) setNewlyBuiltTileIdx(null);
-              }, 340);
+
+            case 'ASSET_SOLD': {
+              gameAudio.playSellAsset();
+              const pos = getTileCenter(ev.tileIndex);
+              spawnShockwave(pos.x, pos.y, '#F59E0B');
+              break;
             }
-            break;
-          }
 
-          case 'ASSET_SOLD': {
-            gameAudio.playSellAsset();
-            const pos = getTileCenter(ev.tileIndex);
-            spawnShockwave(pos.x, pos.y, '#F59E0B');
-            break;
-          }
+            case 'AUCTION_SOUND':
+              gameAudio.playAuction(ev.kind);
+              break;
 
-          case 'AUCTION_SOUND':
-            gameAudio.playAuction(ev.kind);
-            break;
+            case 'BANKRUPT':
+              gameAudio.playBankrupt();
+              triggerBoardShake();
+              break;
 
-          case 'BANKRUPT':
-            gameAudio.playBankrupt();
-            triggerBoardShake();
-            break;
-
-          case 'VICTORY': {
-            gameAudio.playVictoryFanfare();
-            const winner = nextState.players.find((pl) => pl.id === ev.winnerId);
-            if (winner) {
-              setTimeout(() => gameAudio.playCharacterSignature(winner.characterId), 980);
+            case 'VICTORY': {
+              gameAudio.playVictoryFanfare();
+              const winner = nextState.players.find((pl) => pl.id === ev.winnerId);
+              if (winner) {
+                setTimeout(() => gameAudio.playCharacterSignature(winner.characterId), 980);
+              }
+              sceneRef.current?.triggerVictoryFireworks();
+              break;
             }
-            sceneRef.current?.triggerVictoryFireworks();
-            break;
           }
         }
-      }
+      } catch (err) {
+        console.error('[CoTyPhu] Loi dien hoat nuoc di, tu dong phuc hoi trang thai:', err);
+        if (mountedRef.current) {
+          setTransferStage(null);
+          setCashTransfers([]);
+          setActivePawnAnim(null);
+          livePawnOverrideRef.current = null;
+          setAirportFlight(null);
+          setFlyingCard(null);
+          setJailSlam(null);
+        }
+      } finally {
+        if (mountedRef.current) {
+          sceneRef.current?.setImmediateDice(finalNextState.lastDiceValues);
+          setLiveDice(null);
+          setDisplayState(finalNextState);
 
-      if (mountedRef.current) {
-        sceneRef.current?.setImmediateDice(nextState.lastDiceValues);
-        setLiveDice(null);
-        setDisplayState(nextState);
-        measureTileRects();
-
-        // Xử lý nối tiếp ngay nước đi Online đang xếp hàng (giữ khóa isAnimating để không bị chèn ngang 40ms!)
-        const queued = remoteQueueRef.current.shift();
-        if (queued) {
-          isAnimatingRef.current = false;
-          void dispatchAction(queued.action, queued.rollPower, {
-            resultingState: queued.resultingState,
-            deckSync: queued.deckSync,
-          });
+          // Xử lý nối tiếp ngay nước đi Online đang xếp hàng (bỏ qua CONFIRM_CARD trùng lặp đã hết hiệu lực để không bao giờ kẹt khóa isAnimating!)
+          let nextQueued = remoteQueueRef.current.shift();
+          while (
+            nextQueued &&
+            nextQueued.action.type === 'CONFIRM_CARD' &&
+            latestStateRef.current.phase !== 'CARD_REVEAL'
+          ) {
+            nextQueued = remoteQueueRef.current.shift();
+          }
+          if (nextQueued) {
+            isAnimatingRef.current = false;
+            void dispatchAction(nextQueued.action, nextQueued.rollPower, {
+              resultingState: nextQueued.resultingState,
+              deckSync: nextQueued.deckSync,
+            });
+          } else {
+            isAnimatingRef.current = false;
+            setIsAnimating(false);
+          }
         } else {
           isAnimatingRef.current = false;
-          setIsAnimating(false);
         }
       }
+      return true;
     },
     [
       animateDomPawnPath,
@@ -2076,7 +2242,6 @@ export function GameBoardView({
       getTileCenter,
       spawnShockwave,
       spawnTrailSpark,
-      measureTileRects,
       showDramaBanner,
     ],
   );
@@ -2159,7 +2324,7 @@ export function GameBoardView({
       });
       const rollDelayMs = onlineContext ? 380 : 780;
       const timer = setTimeout(() => {
-        const botAction = computeBotAction(latestStateRef.current);
+        const botAction = computeBotAction(latestStateRef.current, true);
         if (botAction) {
           const botPower = 0.45 + cryptoRandomInt(0, 45) / 100;
           void dispatchAction(botAction, botPower);
@@ -2197,7 +2362,7 @@ export function GameBoardView({
     let commitTimer: ReturnType<typeof setTimeout> | null = null;
 
     const decideTimer = setTimeout(() => {
-      const botAction = computeBotAction(latestStateRef.current);
+      const botAction = computeBotAction(latestStateRef.current, true);
       if (!botAction) return;
 
       const accepted =
@@ -2294,6 +2459,22 @@ export function GameBoardView({
       }
     }
   }, []);
+
+  useEffect(() => {
+    const onBlur = () => {
+      if (pointerDownTimeRef.current !== null) {
+        cancelCharging();
+      }
+    };
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, [cancelCharging]);
+
+  useEffect(() => {
+    if (isAnimating && pointerDownTimeRef.current !== null) {
+      cancelCharging();
+    }
+  }, [isAnimating, cancelCharging]);
 
   const handleCenterPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!canHumanTapRoll) return;
@@ -2466,8 +2647,8 @@ export function GameBoardView({
           {/* SÂN KHẤU WEBGL 3D PHỦ TRỌN TOÀN BỘ SÂN GIỮA — TỰ ĐỘNG ẨN SẠCH KHI ĐANG ĐƯA TIỀN HOẶC BAY MÁY BAY */}
           <div
             ref={diceCanvasRef}
-            className={`pointer-events-none absolute inset-0 z-[16] h-full w-full transition-all duration-300 ${
-              isStageShowcase ? 'scale-90 opacity-0' : 'scale-100 opacity-100'
+            className={`pointer-events-none absolute inset-0 z-[16] h-full w-full transition-opacity duration-200 ${
+              isStageShowcase ? 'opacity-0' : 'opacity-100'
             }`}
           />
 
@@ -2478,7 +2659,7 @@ export function GameBoardView({
                 type="button"
                 onClick={onBackToLobby}
                 title="Quay lại Phòng chờ"
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/88 text-amber-100 shadow-md transition hover:bg-slate-900 cursor-pointer"
               >
                 <ArrowLeft className="h-4 w-4" />
                 <span className="sr-only">Phòng chờ</span>
@@ -2487,7 +2668,7 @@ export function GameBoardView({
                 type="button"
                 onClick={toggleMute}
                 title={muted ? 'Bật nhạc nền (tiếng cờ luôn bật)' : 'Tắt nhạc nền (tiếng cờ luôn bật)'}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/88 text-amber-100 shadow-md transition hover:bg-slate-900 cursor-pointer"
               >
                 {muted ? <VolumeX className="h-4 w-4 text-rose-300" /> : <Volume2 className="h-4 w-4" />}
               </button>
@@ -2496,7 +2677,7 @@ export function GameBoardView({
                 data-testid="rules-book-button"
                 onClick={() => setShowRules(true)}
                 title="Bộ Luật Chơi 52 Ô"
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/88 text-amber-100 shadow-md transition hover:bg-slate-900 cursor-pointer"
               >
                 <BookOpen className="h-4 w-4" />
               </button>
@@ -2504,7 +2685,7 @@ export function GameBoardView({
                 type="button"
                 onClick={() => void toggleFullscreen()}
                 title={isFullscreen ? 'Thu nhỏ màn hình' : 'Toàn màn hình ngang'}
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 shadow-md backdrop-blur-xs transition hover:bg-slate-900 cursor-pointer"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#FDE68A]/55 bg-slate-950/88 text-amber-100 shadow-md transition hover:bg-slate-900 cursor-pointer"
               >
                 {isFullscreen ? <Minimize2 className="h-4 w-4 text-emerald-300" /> : <Maximize2 className="h-4 w-4" />}
               </button>
@@ -2517,10 +2698,10 @@ export function GameBoardView({
                     ? 'Đang bật Chế độ Mượt (tối ưu điện thoại / giảm lag) — bấm để chuyển về Đồ họa Cao'
                     : 'Bật Chế độ Mượt (giảm lag trên điện thoại & tiết kiệm pin)'
                 }
-                className={`flex h-8 items-center gap-1 rounded-full border px-2.5 text-[10px] font-black shadow-md backdrop-blur-xs transition cursor-pointer ${
+                className={`flex h-8 items-center gap-1 rounded-full border px-2.5 text-[10px] font-black shadow-md transition cursor-pointer ${
                   smoothMode
-                    ? 'border-emerald-300/80 bg-emerald-600/85 text-white hover:bg-emerald-500'
-                    : 'border-[#FDE68A]/55 bg-slate-950/70 text-amber-100 hover:bg-slate-900'
+                    ? 'border-emerald-300/80 bg-emerald-600/92 text-white hover:bg-emerald-500'
+                    : 'border-[#FDE68A]/55 bg-slate-950/88 text-amber-100 hover:bg-slate-900'
                 }`}
               >
                 <Zap className={`h-3.5 w-3.5 ${smoothMode ? 'fill-yellow-200 text-yellow-200' : ''}`} />
@@ -2532,7 +2713,7 @@ export function GameBoardView({
             <div className="flex flex-col items-center gap-1">
               <div
                 ref={mobileBankAnchorRef}
-                className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[#EAB308]/65 bg-gradient-to-b from-slate-900/85 to-slate-950/90 px-3.5 py-1 text-[11px] font-black tracking-wide text-amber-200 shadow-lg backdrop-blur-xs"
+                className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[#EAB308]/65 bg-gradient-to-b from-slate-900/92 to-slate-950/95 px-3.5 py-1 text-[11px] font-black tracking-wide text-amber-200 shadow-lg"
               >
                 <span>CỜ TỶ PHÚ VIỆT NAM</span>
                 {onlineContext && (
@@ -2579,7 +2760,7 @@ export function GameBoardView({
             {/* GÓC TRÊN PHẢI: BẢNG TỶ PHÚ 2 CỘT SIÊU GỌN VIỀN ĐỒNG (LUÔN HIỂN THỊ CHUẨN TRÊN CẢ PC & ĐIỆN THOẠI NGANG) */}
             <div
               data-no-roll="true"
-              className="block w-[294px] shrink-0 rounded-xl border border-[#EAB308]/55 bg-slate-950/68 p-1 shadow-[0_8px_22px_rgba(0,0,0,0.48)] backdrop-blur-xs"
+              className="block w-[294px] shrink-0 rounded-xl border border-[#EAB308]/55 bg-slate-950/86 p-1 shadow-[0_8px_22px_rgba(0,0,0,0.48)]"
             >
               <div className="mb-1 flex items-center justify-between border-b border-white/10 px-1 pb-0.5 text-[8.5px] font-black uppercase tracking-[0.14em] text-amber-300/95">
                 <span>BẢNG TỶ PHÚ</span>
@@ -2617,11 +2798,6 @@ export function GameBoardView({
                   return (
                     <div
                       key={p.id}
-                      ref={(el) => {
-                        if (el && el.offsetParent !== null) {
-                          playerRowRefs.current[p.id] = el;
-                        }
-                      }}
                       className={`relative flex items-center gap-1 overflow-hidden rounded-lg border px-1.5 py-0.5 shadow-sm transition duration-300 ${
                         p.isBankrupt
                           ? 'border-white/10 bg-slate-950/40 opacity-45 grayscale'
@@ -2713,8 +2889,10 @@ export function GameBoardView({
               </div>
               <div className="relative flex items-center justify-center">
                 <div
-                  className="smooth-hide-blur pointer-events-none absolute h-28 w-28 rounded-full blur-2xl opacity-55"
-                  style={{ backgroundColor: leftStagePlayer.landHex }}
+                  className="smooth-hide-blur pointer-events-none absolute h-36 w-36 rounded-full"
+                  style={{
+                    background: `radial-gradient(circle, ${leftStagePlayer.landHex}8C 0%, ${leftStagePlayer.landHex}24 48%, transparent 74%)`,
+                  }}
                 />
                 <img
                   src={leftStageChar.standeeUrl}
@@ -2858,7 +3036,7 @@ export function GameBoardView({
                       : `🎲 QUAY ĐƯỢC ${diceSum} ĐIỂM! (${liveDice.values.join(' + ')})`}
                   </div>
                 ) : (
-                  <div className="inline-flex items-center gap-1.5 rounded-full border border-[#FDE68A]/35 bg-slate-950/75 px-3 py-0.5 text-[11px] font-black text-amber-100 shadow backdrop-blur-xs">
+                  <div className="inline-flex items-center gap-1.5 rounded-full border border-[#FDE68A]/35 bg-slate-950/88 px-3 py-0.5 text-[11px] font-black text-amber-100 shadow">
                     <Dices className="h-3.5 w-3.5 text-amber-300" />
                     <span>
                       {diceValuesToShow.join(' + ')} ({diceSum})
@@ -2897,8 +3075,10 @@ export function GameBoardView({
                   </div>
                   <div className="relative flex items-center justify-center">
                     <div
-                      className="pointer-events-none absolute h-28 w-28 rounded-full blur-2xl opacity-60"
-                      style={{ backgroundColor: rightCreditorPlayer.landHex }}
+                      className="pointer-events-none absolute h-36 w-36 rounded-full"
+                      style={{
+                        background: `radial-gradient(circle, ${rightCreditorPlayer.landHex}96 0%, ${rightCreditorPlayer.landHex}28 48%, transparent 74%)`,
+                      }}
                     />
                     <img
                       src={rightCreditorChar.standeeUrl}
@@ -2921,13 +3101,15 @@ export function GameBoardView({
                   </div>
                   <div className="relative flex items-center justify-center">
                     <div
-                      className={`pointer-events-none absolute h-24 w-32 rounded-full blur-2xl transition-opacity ${
-                        bankPulse?.kind === 'out'
-                          ? 'bg-emerald-400/60 opacity-100'
-                          : bankPulse?.kind === 'in'
-                            ? 'bg-amber-300/70 opacity-100'
-                            : 'bg-amber-300/20 opacity-65'
-                      }`}
+                      className="pointer-events-none absolute h-32 w-40 rounded-full transition-opacity"
+                      style={{
+                        background:
+                          bankPulse?.kind === 'out'
+                            ? 'radial-gradient(circle, rgba(52,211,153,0.58) 0%, rgba(52,211,153,0.16) 50%, transparent 74%)'
+                            : bankPulse?.kind === 'in'
+                              ? 'radial-gradient(circle, rgba(252,211,77,0.68) 0%, rgba(252,211,77,0.18) 50%, transparent 74%)'
+                              : 'radial-gradient(circle, rgba(252,211,77,0.22) 0%, transparent 72%)',
+                      }}
                     />
                     <CentralBankBuildingSvg
                       className="relative h-[126px] w-[178px] drop-shadow-[0_14px_18px_rgba(0,0,0,0.65)]"
@@ -2958,7 +3140,7 @@ export function GameBoardView({
           <div className="relative z-20 flex min-h-[38px] shrink-0 items-end justify-center pt-1">
             {/* 1. Chờ người chơi chạm sân giữa để tung xúc xắc */}
             {canHumanTapRoll && displayState.phase === 'WAIT_ROLL' && (
-              <div className="pointer-events-none flex items-center gap-2 rounded-full border border-[#FDE68A]/65 bg-slate-950/80 px-5 py-1.5 text-xs font-bold text-amber-100 shadow-lg backdrop-blur-xs sm:text-sm">
+              <div className="pointer-events-none flex items-center gap-2 rounded-full border border-[#FDE68A]/65 bg-slate-950/90 px-5 py-1.5 text-xs font-bold text-amber-100 shadow-lg sm:text-sm">
                 <Sparkles className="h-4 w-4 text-amber-300" />
                 <span>
                   Lượt <strong className="text-amber-300">{currentPlayer.name}</strong> —{' '}
@@ -2972,12 +3154,12 @@ export function GameBoardView({
             {/* 2. Trạng thái Bot đang suy nghĩ hoặc đang diễn hoạt */}
             {!showHumanDecisionCard && !(canHumanTapRoll && displayState.phase === 'WAIT_ROLL') && (
               <div
-                className={`pointer-events-none inline-flex items-center gap-2 rounded-full border px-5 py-1.5 text-xs font-bold shadow-lg backdrop-blur-xs sm:text-sm ${
+                className={`pointer-events-none inline-flex items-center gap-2 rounded-full border px-5 py-1.5 text-xs font-bold shadow-lg sm:text-sm ${
                   botThought?.tone === 'accept'
-                    ? 'border-emerald-300/70 bg-emerald-950/85 text-emerald-200'
+                    ? 'border-emerald-300/70 bg-emerald-950/92 text-emerald-200'
                     : botThought?.tone === 'reject'
-                      ? 'border-rose-300/60 bg-rose-950/80 text-rose-200'
-                      : 'border-white/25 bg-slate-950/80 text-sky-100'
+                      ? 'border-rose-300/60 bg-rose-950/90 text-rose-200'
+                      : 'border-white/25 bg-slate-950/90 text-sky-100'
                 }`}
               >
                 <Sparkles className="h-4 w-4 text-amber-300" />
@@ -3011,7 +3193,7 @@ export function GameBoardView({
               return (
                 <div
                   data-no-roll="true"
-                  className="animate-decision-up w-full overflow-hidden rounded-xl border-2 border-[#EAB308]/85 bg-[#0F172A]/95 shadow-[0_14px_38px_rgba(0,0,0,0.85)] backdrop-blur-md"
+                  className="animate-decision-up w-full overflow-hidden rounded-xl border-2 border-[#EAB308]/85 bg-[#0F172A]/97 shadow-[0_14px_38px_rgba(0,0,0,0.85)]"
                 >
                   {/* Viền màu nhận diện siêu mảnh (không chứa chữ rườm rà) */}
                   <div className="h-[3.5px] w-full" style={{ backgroundColor: accentHex }} />
@@ -3532,7 +3714,7 @@ export function GameBoardView({
       {/* Bảng Luật Chơi 52 Ô */}
       {showRules && <RulesModal onClose={() => setShowRules(false)} />}
 
-      {/* Modal Thẻ Cơ Hội / Khí Vận (32 tranh minh họa + tự đóng 7 giây) */}
+      {/* Modal Thẻ Cơ Hội / Khí Vận (32 tranh minh họa + tự đóng 7 giây + chống kẹt khi cả Chủ phòng lẫn Khách bị lag) */}
       {displayState.phase === 'CARD_REVEAL' && displayState.activeCard && !isAnimating && (() => {
         const cardDrawer =
           displayState.players.find((p) => p.id === displayState.activeCard?.drawerId) ?? currentPlayer;
@@ -3544,12 +3726,42 @@ export function GameBoardView({
             ? isOnlineBotCoordinator
             : cardDrawer.id === onlineContext.localPlayerId;
 
+        // Chọn đúng 1 người đang kết nối KHÁC người chịu trách nhiệm chính (Chủ phòng khi Bot rút thẻ, hoặc chính người rút thẻ)
+        // làm người gỡ kẹt dự phòng sau +2.5s đệm — bảo vệ cả 3 trường hợp: Khách treo, Chủ phòng treo, và Chủ phòng treo khi Bot rút thẻ!
+        const botCoordinatorSeatId = onlineContext
+          ? (onlineContext.snapshot.humans.find((h) => h.isHost && h.connected)?.seatId ??
+              onlineContext.snapshot.humans.find((h) => h.connected)?.seatId ??
+              null)
+          : null;
+        const primaryConfirmerSeatId = drawerIsBotLike ? botCoordinatorSeatId : cardDrawer.id;
+        const fallbackCandidates = onlineContext
+          ? onlineContext.snapshot.humans.filter(
+              (h) => h.connected && h.seatId !== primaryConfirmerSeatId,
+            )
+          : [];
+        // Xếp hàng dự phòng theo thứ tự (ưu tiên Chủ phòng nếu không phải người chịu trách nhiệm chính, rồi lần lượt các Khách đang kết nối)
+        // với độ trễ giãn cách +2.5s / +4.5s / +6.5s -> kể cả 2 máy treo cùng lúc, máy thứ 3 vẫn tự gỡ kẹt thẻ sạch sẽ!
+        const orderedFallbacks = [
+          ...fallbackCandidates.filter((h) => h.isHost),
+          ...fallbackCandidates.filter((h) => !h.isHost),
+        ];
+        const myFallbackIdx = onlineContext
+          ? orderedFallbacks.findIndex((h) => h.seatId === onlineContext.localPlayerId)
+          : -1;
+        const canFallbackConfirmCard = Boolean(
+          onlineContext && !canConfirmCard && (myFallbackIdx >= 0 || isOnlineBotCoordinator),
+        );
+        const fallbackDelayMs = 2500 + Math.max(0, myFallbackIdx) * 2000;
+
         return (
           <CardRevealModal
             prompt={displayState.activeCard}
             drawer={cardDrawer}
             canConfirm={canConfirmCard}
-            onConfirm={() => void dispatchAction({ type: 'CONFIRM_CARD' })}
+            canFallbackConfirm={canFallbackConfirmCard}
+            fallbackDelayMs={fallbackDelayMs}
+            onConfirm={() => dispatchAction({ type: 'CONFIRM_CARD' })}
+            onFallbackConfirm={() => dispatchAction({ type: 'CONFIRM_CARD' })}
           />
         );
       })()}

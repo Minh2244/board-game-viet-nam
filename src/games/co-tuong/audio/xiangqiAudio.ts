@@ -1,3 +1,4 @@
+import { attachAutoDisconnect, createIdleAudioContextManager } from '@/shared/audio/audioLifecycle';
 import { createWarmRoomReverb, type WarmRoomReverbBus } from '@/shared/audio/warmRoomReverb';
 
 /**
@@ -10,6 +11,7 @@ let xCtx: AudioContext | null = null;
 let masterBus: GainNode | null = null;
 let reverbNode: WarmRoomReverbBus | null = null;
 let noiseBuffer: AudioBuffer | null = null;
+const idleAudio = createIdleAudioContextManager(() => xCtx, 8000);
 
 function ensureAudio(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -48,7 +50,7 @@ function ensureAudio(): AudioContext | null {
     for (let i = 0; i < nLen; i += 1) nd[i] = Math.random() * 2 - 1;
   }
 
-  if (xCtx.state === 'suspended') void xCtx.resume().catch(() => {});
+  idleAudio.touch();
   return xCtx;
 }
 
@@ -75,6 +77,7 @@ function xiangqiWoodSnap(pitch = 1, vol = 0.34, delay = 0): void {
   thumpGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.082);
   thump.connect(thumpGain);
   send(thumpGain, true);
+  attachAutoDisconnect(thump, [thumpGain]);
   thump.start(t0);
   thump.stop(t0 + 0.095);
 
@@ -94,6 +97,7 @@ function xiangqiWoodSnap(pitch = 1, vol = 0.34, delay = 0): void {
   crack.connect(crackFlt);
   crackFlt.connect(crackGain);
   send(crackGain, true);
+  attachAutoDisconnect(crack, [crackFlt, crackGain]);
   crack.start(t0);
   crack.stop(t0 + 0.048);
 
@@ -112,6 +116,7 @@ function xiangqiWoodSnap(pitch = 1, vol = 0.34, delay = 0): void {
     src.connect(flt);
     flt.connect(ng);
     send(ng, true);
+    attachAutoDisconnect(src, [flt, ng]);
     src.start(t0);
     src.stop(t0 + 0.035);
   }
@@ -130,6 +135,7 @@ function gongTone(freq: number, dur: number, vol = 0.14, delay = 0, type: Oscill
   gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
   osc.connect(gain);
   send(gain, true);
+  attachAutoDisconnect(osc, [gain]);
   osc.start(t0);
   osc.stop(t0 + dur + 0.05);
 }
@@ -165,6 +171,7 @@ export const xiangqiAudio = {
       dg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.36);
       drum.connect(dg);
       send(dg, true);
+      attachAutoDisconnect(drum, [dg]);
       drum.start(t0);
       drum.stop(t0 + 0.4);
     }

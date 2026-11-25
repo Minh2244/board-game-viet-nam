@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
 import { cryptoRandomInt } from '@/shared/crypto/random';
@@ -229,6 +229,13 @@ export default function CoCaNguaGame({ onExitToHub }: GameComponentProps) {
           onRemoteAction: (ev) => {
             remoteActionHandlerRef.current?.(ev);
           },
+          onStateResync: (authoritativeState) => {
+            setActiveMatch((prev) =>
+              prev?.mode === 'online'
+                ? { ...prev, state: authoritativeState, key: prev.key + 1 }
+                : prev,
+            );
+          },
           onRoomClosed: (reason) => {
             onlineClientRef.current = null;
             syncRoomUrl(null);
@@ -423,6 +430,29 @@ export default function CoCaNguaGame({ onExitToHub }: GameComponentProps) {
     [],
   );
 
+  const onlineContext = useMemo<CoCaNguaOnlineContext | undefined>(() => {
+    if (activeMatch?.mode !== 'online' || !onlineSnapshot || !onlineClientRef.current) {
+      return undefined;
+    }
+    const me = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
+    return {
+      roomCode: onlineSnapshot.roomCode,
+      localColor: me?.color ?? 'red',
+      isHost: onlineClientRef.current.isHost,
+      snapshot: onlineSnapshot,
+      onCommitAction: handleCommitOnlineAction,
+      registerRemoteActionHandler,
+      onDissolveRoom: handleDissolveRoom,
+    };
+  }, [
+    activeMatch?.mode,
+    onlineSnapshot,
+    myToken,
+    handleCommitOnlineAction,
+    registerRemoteActionHandler,
+    handleDissolveRoom,
+  ]);
+
   // 0. Đang khôi phục phòng Online sau khi F5
   if (autoRestoringCode) {
     return (
@@ -439,20 +469,6 @@ export default function CoCaNguaGame({ onExitToHub }: GameComponentProps) {
 
   // 1. Đang chơi ván Cờ Cá Ngựa
   if (activeMatch) {
-    let onlineContext: CoCaNguaOnlineContext | undefined;
-    if (activeMatch.mode === 'online' && onlineSnapshot && onlineClientRef.current) {
-      const me = onlineSnapshot.humans.find((h) => h.playerToken === myToken);
-      onlineContext = {
-        roomCode: onlineSnapshot.roomCode,
-        localColor: me?.color ?? 'red',
-        isHost: onlineClientRef.current.isHost,
-        snapshot: onlineSnapshot,
-        onCommitAction: handleCommitOnlineAction,
-        registerRemoteActionHandler,
-        onDissolveRoom: handleDissolveRoom,
-      };
-    }
-
     return (
       <HorseBoardView
         key={activeMatch.key}

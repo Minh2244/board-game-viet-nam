@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { formatShortVnd } from '../engine/rules';
 
 export interface CashParticleSeed {
@@ -32,8 +32,10 @@ export interface ActiveCashTransfer {
 /** Cọc tiền giấy dày cột đai + Chồng đồng xu vàng nổi bật (trượt từ từ giữa Nhân Vật ↔ Ngân Hàng) */
 const CashStackBundleSvg = memo(function CashStackBundleSvg({
   tone,
+  uid,
 }: {
   tone: ActiveCashTransfer['tone'];
+  uid: number;
 }) {
   const billTop =
     tone === 'from-bank' ? '#6EE7B7' : tone === 'player-to-player' ? '#7DD3FC' : '#A7F3D0';
@@ -42,6 +44,8 @@ const CashStackBundleSvg = memo(function CashStackBundleSvg({
   const billSide =
     tone === 'from-bank' ? '#047857' : tone === 'player-to-player' ? '#075985' : '#065F46';
   const bandColor = tone === 'player-to-player' ? '#FBBF24' : '#84CC16';
+  const topGradId = `stackTop-${tone}-${uid}`;
+  const coinGradId = `goldCoinFace-${uid}`;
 
   return (
     <svg
@@ -50,11 +54,11 @@ const CashStackBundleSvg = memo(function CashStackBundleSvg({
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id={`stackTop-${tone}`} x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={topGradId} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor={billTop} />
           <stop offset="100%" stopColor={billMid} />
         </linearGradient>
-        <linearGradient id="goldCoinFace" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={coinGradId} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor="#FEF9C3" />
           <stop offset="55%" stopColor="#FACC15" />
           <stop offset="100%" stopColor="#CA8A04" />
@@ -80,7 +84,7 @@ const CashStackBundleSvg = memo(function CashStackBundleSvg({
       {/* Mặt tờ tiền trên cùng của xấp tiền */}
       <polygon
         points="12,34 48,10 94,28 58,52"
-        fill={`url(#stackTop-${tone})`}
+        fill={`url(#${topGradId})`}
         stroke="#064E3B"
         strokeWidth="1.6"
         strokeLinejoin="round"
@@ -139,7 +143,7 @@ const CashStackBundleSvg = memo(function CashStackBundleSvg({
             cy={cy}
             rx="18.5"
             ry="8.5"
-            fill="url(#goldCoinFace)"
+            fill={`url(#${coinGradId})`}
             stroke="#FEF08A"
             strokeWidth="1.1"
           />
@@ -162,17 +166,18 @@ const CashStackBundleSvg = memo(function CashStackBundleSvg({
 });
 
 /** Đồng xu vàng nhỏ bay nối đuôi nhẹ tạo cảm giác chuyển động mượt */
-const TrailingGoldCoinSvg = memo(function TrailingGoldCoinSvg() {
+const TrailingGoldCoinSvg = memo(function TrailingGoldCoinSvg({ uid }: { uid: string }) {
+  const gradId = `coinTrailGold-${uid}`;
   return (
     <svg viewBox="0 0 26 26" className="h-5 w-5 drop-shadow-[0_4px_8px_rgba(0,0,0,0.55)]" aria-hidden="true">
       <defs>
-        <radialGradient id="coinTrailGold" cx="35%" cy="30%" r="70%">
+        <radialGradient id={gradId} cx="35%" cy="30%" r="70%">
           <stop offset="0%" stopColor="#FEF9C3" />
           <stop offset="55%" stopColor="#F59E0B" />
           <stop offset="100%" stopColor="#92400E" />
         </radialGradient>
       </defs>
-      <circle cx="13" cy="13" r="10.5" fill="url(#coinTrailGold)" stroke="#FEF08A" strokeWidth="1.6" />
+      <circle cx="13" cy="13" r="10.5" fill={`url(#${gradId})`} stroke="#FEF08A" strokeWidth="1.6" />
       <text x="13" y="17" textAnchor="middle" fill="#78350F" fontSize="11" fontWeight="900" fontFamily="serif">
         ₫
       </text>
@@ -217,17 +222,33 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
         ? 'text-sky-300'
         : 'text-amber-300';
   const d = `M ${tr.startX} ${tr.startY} Q ${tr.ctrlX} ${tr.ctrlY} ${tr.endX} ${tr.endY}`;
-  const trailCoins = tr.items.slice(0, 3);
+  const trailCoins = useMemo(() => tr.items.slice(0, 3), [tr.items]);
 
   useEffect(() => {
     let rafId = 0;
     let cancelled = false;
     let arrived = false;
+    let completed = false;
     const tStart = performance.now();
     const durationMs = Math.max(300, tr.durationMs);
 
+    const completeOnce = () => {
+      if (completed) return;
+      completed = true;
+      cancelAnimationFrame(rafId);
+      clearTimeout(safetyTimer);
+      if (!arrived) {
+        arrived = true;
+        callbacksRef.current.onArrive?.();
+      }
+      callbacksRef.current.onComplete?.();
+    };
+
+    // Bảo vệ chống đơ tuyệt đối nếu tab bị ẩn/trình duyệt dừng RAF giữa chuyến bay tiền
+    const safetyTimer = setTimeout(completeOnce, durationMs + 450);
+
     const tick = (now: number) => {
-      if (cancelled) return;
+      if (cancelled || completed) return;
       const p = Math.min(1, Math.max(0, (now - tStart) / durationMs));
       const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
 
@@ -292,11 +313,7 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
       if (p < 1) {
         rafId = requestAnimationFrame(tick);
       } else {
-        if (!arrived) {
-          arrived = true;
-          callbacksRef.current.onArrive?.();
-        }
-        callbacksRef.current.onComplete?.();
+        completeOnce();
       }
     };
 
@@ -304,13 +321,14 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafId);
+      clearTimeout(safetyTimer);
     };
   }, [tr, trailCoins]);
 
   return (
     <>
       <svg className="absolute inset-0 h-full w-full overflow-visible">
-        <g ref={arcGroupRef} style={{ opacity: 0 }}>
+        <g ref={arcGroupRef} style={{ opacity: 0, willChange: 'opacity' }}>
           <path
             d={d}
             fill="none"
@@ -326,7 +344,6 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
             strokeWidth="2.8"
             strokeDasharray="10 8"
             strokeLinecap="round"
-            className="animate-cash-arc"
           />
           <circle
             ref={pulseOuterRef}
@@ -364,7 +381,7 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
           }}
           className="absolute"
         >
-          <TrailingGoldCoinSvg />
+          <TrailingGoldCoinSvg uid={`${tr.id}-${idx}`} />
         </div>
       ))}
 
@@ -395,7 +412,7 @@ const CashTransferFlightItem = memo(function CashTransferFlightItem({
             </span>
           )}
         </div>
-        <CashStackBundleSvg tone={tr.tone} />
+        <CashStackBundleSvg tone={tr.tone} uid={tr.id} />
       </div>
     </>
   );

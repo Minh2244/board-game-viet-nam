@@ -116,13 +116,13 @@ function scoreAssetKeepPriority(tiles: readonly BoardTile[], tile: BoardTile, ow
  * Bộ não Bot SmartAI chạy hoàn toàn cục bộ, mọi quyết định có xác suất biến thiên nhẹ
  * bằng Web Crypto để tránh đánh máy móc rập khuôn giữa các ván.
  */
-export function computeBotAction(state: GameState): GameAction | null {
+export function computeBotAction(state: GameState, forceActAsBot = false): GameAction | null {
   if (state.phase === 'GAME_OVER') return null;
 
   if (state.phase === 'DEBT_LIQUIDATION' && state.debtQueue.length > 0) {
     const debt = state.debtQueue[0];
     const debtor = state.players.find((p) => p.id === debt.debtorId);
-    if (!debtor || !debtor.isBot) return null;
+    if (!debtor || (!debtor.isBot && !forceActAsBot)) return null;
 
     if (debtor.cash + getTotalLiquidatableValue(state.tiles, debtor.id) < debt.amount) {
       return { type: 'DECLARE_BANKRUPTCY' };
@@ -154,7 +154,7 @@ export function computeBotAction(state: GameState): GameAction | null {
   }
 
   const bot = state.players[state.currentPlayerIndex];
-  if (!bot || !bot.isBot || bot.isBankrupt) return null;
+  if (!bot || (!bot.isBot && !forceActAsBot) || bot.isBankrupt) return null;
 
   switch (state.phase) {
     case 'WAIT_ROLL':

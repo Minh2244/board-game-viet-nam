@@ -30,55 +30,133 @@ import {
 } from './TileIcons';
 
 const CARD_DISPLAY_MS = 7000;
+const CARD_ONLINE_FALLBACK_GRACE_MS = 2500;
 
 export function CardRevealModal({
   prompt,
   drawer,
   canConfirm = true,
+  canFallbackConfirm = false,
+  fallbackDelayMs = CARD_ONLINE_FALLBACK_GRACE_MS,
   onConfirm,
+  onFallbackConfirm,
 }: {
   prompt: ActiveCardPrompt;
   drawer: PlayerState;
   canConfirm?: boolean;
-  onConfirm: () => void;
+  canFallbackConfirm?: boolean;
+  fallbackDelayMs?: number;
+  onConfirm: () => boolean | void | Promise<boolean | void>;
+  onFallbackConfirm?: () => boolean | void | Promise<boolean | void>;
 }) {
   const isChance = prompt.card.deck === 'CHANCE';
   const artUrl = getCardArtworkUrl(prompt.card.id);
-  const [msLeft, setMsLeft] = useState(CARD_DISPLAY_MS);
-  const firedRef = useRef(false);
+  const [secLeft, setSecLeft] = useState(Math.ceil(CARD_DISPLAY_MS / 1000));
+  const [barStarted, setBarStarted] = useState(false);
+  const confirmedRef = useRef(false);
   const onConfirmRef = useRef(onConfirm);
+  const onFallbackConfirmRef = useRef(onFallbackConfirm);
   onConfirmRef.current = onConfirm;
+  onFallbackConfirmRef.current = onFallbackConfirm;
 
   useEffect(() => {
-    firedRef.current = false;
-    setMsLeft(CARD_DISPLAY_MS);
+    confirmedRef.current = false;
+    setSecLeft(Math.ceil(CARD_DISPLAY_MS / 1000));
+    setBarStarted(false);
+
+    // Kích hoạt thanh tiến độ chạy thuần GPU scaleX (0 React re-render 60fps!)
+    const rafBar = requestAnimationFrame(() => {
+      setBarStarted(true);
+    });
+
     const start = Date.now();
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+
+    const tryTrigger = (fn: () => boolean | void | Promise<boolean | void>, retriesLeft: number) => {
+      if (cancelled || confirmedRef.current) return;
+      const scheduleRetry = () => {
+        if (!cancelled && !confirmedRef.current && retriesLeft > 0) {
+          retryTimer = setTimeout(() => tryTrigger(fn, retriesLeft - 1), 180);
+        }
+      };
+      try {
+        const res = fn();
+        if (res === false) {
+          scheduleRetry();
+          return;
+        }
+        if (res && typeof (res as Promise<boolean | void>).then === 'function') {
+          void (res as Promise<boolean | void>).then(
+            (resolved) => {
+              if (cancelled) return;
+              if (resolved === false) {
+                scheduleRetry();
+              } else {
+                confirmedRef.current = true;
+              }
+            },
+            () => {
+              scheduleRetry();
+            },
+          );
+          return;
+        }
+        confirmedRef.current = true;
+      } catch {
+        scheduleRetry();
+      }
+    };
+
     const timer = setInterval(() => {
-      const rem = Math.max(0, CARD_DISPLAY_MS - (Date.now() - start));
-      setMsLeft(rem);
-      if (rem === 0 && !firedRef.current) {
-        firedRef.current = true;
+      const elapsed = Date.now() - start;
+      const rem = Math.max(0, CARD_DISPLAY_MS - elapsed);
+      const nextSec = Math.max(1, Math.ceil(rem / 1000));
+      setSecLeft((prev) => (prev === nextSec ? prev : nextSec));
+
+      if (rem === 0) {
         clearInterval(timer);
         if (canConfirm) {
-          onConfirmRef.current();
+          tryTrigger(() => onConfirmRef.current(), 10);
+        } else if (canFallbackConfirm && onFallbackConfirmRef.current) {
+          // Phòng chống kẹt thẻ Online (xếp tầng theo thứ tự dự phòng): nếu máy người rút bị lag/rớt mạng không gửi CONFIRM_CARD -> máy khác tự đóng hộ!
+          fallbackTimer = setTimeout(() => {
+            if (!cancelled && !confirmedRef.current && onFallbackConfirmRef.current) {
+              tryTrigger(() => onFallbackConfirmRef.current!(), 10);
+            }
+          }, Math.max(CARD_ONLINE_FALLBACK_GRACE_MS, fallbackDelayMs));
         }
       }
-    }, 100);
-    return () => clearInterval(timer);
-  }, [prompt.card.id, prompt.drawerId, canConfirm]);
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafBar);
+      clearInterval(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
+  }, [prompt.card.id, prompt.drawerId, canConfirm, canFallbackConfirm, fallbackDelayMs]);
 
   const handleManualConfirm = () => {
-    if (!canConfirm || firedRef.current) return;
-    firedRef.current = true;
-    onConfirm();
+    if (!canConfirm || confirmedRef.current) return;
+    const res = onConfirm();
+    if (res === false) return;
+    if (res && typeof (res as Promise<boolean | void>).then === 'function') {
+      void (res as Promise<boolean | void>).then((resolved) => {
+        if (resolved !== false) {
+          confirmedRef.current = true;
+        }
+      });
+      return;
+    }
+    confirmedRef.current = true;
   };
-
-  const secLeft = Math.max(1, Math.ceil(msLeft / 1000));
-  const pct = (msLeft / CARD_DISPLAY_MS) * 100;
 
   return (
     <div
-      className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/78 p-4"
       role="dialog"
       aria-modal="true"
     >
@@ -138,9 +216,11 @@ export function CardRevealModal({
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-white/15">
               <div
-                className="h-full rounded-full transition-all duration-100"
+                className="h-full w-full origin-left rounded-full"
                 style={{
-                  width: `${pct}%`,
+                  transform: barStarted ? 'scaleX(0)' : 'scaleX(1)',
+                  transition: barStarted ? `transform ${CARD_DISPLAY_MS}ms linear` : 'none',
+                  willChange: 'transform',
                   background: isChance
                     ? 'linear-gradient(90deg, #38BDF8, #FBBF24)'
                     : 'linear-gradient(90deg, #FB923C, #FDE047)',

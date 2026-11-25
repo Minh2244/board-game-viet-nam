@@ -120,6 +120,7 @@ export class DiceActor3D {
   private isRolling = false;
   private idlePhase = 0;
   private lowPowerMode = false;
+  private activeRollCancel: (() => void) | null = null;
 
   constructor(diceCount: 1 | 2, lowPowerMode = false) {
     this.lowPowerMode = lowPowerMode;
@@ -296,6 +297,10 @@ export class DiceActor3D {
   }
 
   public animateRoll(values: number[], isDouble: boolean, power01 = 0.6): Promise<void> {
+    if (this.activeRollCancel) {
+      this.activeRollCancel();
+      this.activeRollCancel = null;
+    }
     this.isCharging = false;
     this.chargeLevel = 0;
     this.chargeRingMat.opacity = 0;
@@ -352,8 +357,37 @@ export class DiceActor3D {
 
     return new Promise((resolve) => {
       const startTime = performance.now();
+      let rafId = 0;
+      let settled = false;
+
+      const finish = (playEffects: boolean) => {
+        if (settled) return;
+        settled = true;
+        cancelAnimationFrame(rafId);
+        clearTimeout(safetyTimer);
+        if (this.activeRollCancel === cancelAndResolve) {
+          this.activeRollCancel = null;
+        }
+        for (const a of anims) {
+          a.obj.position.copy(a.endPos);
+          a.obj.quaternion.copy(a.endQuat);
+        }
+        this.isRolling = false;
+        if (playEffects && isDouble) {
+          gameAudio.playDoubleSparkle();
+          this.haloProgress = 0;
+          this.spawnImpactSparks(new THREE.Vector3(0, 0.1, DICE_ZONE_Z), 22, '#FBBF24');
+        }
+        resolve();
+      };
+
+      const cancelAndResolve = () => finish(false);
+      this.activeRollCancel = cancelAndResolve;
+      // Bảo vệ tuyệt đối: nếu trình duyệt tạm ngưng RAF (tab nền / tiết kiệm pin), tự chốt điểm sau hạn mức an toàn
+      const safetyTimer = setTimeout(() => finish(true), durationMs + 500);
 
       const step = (now: number) => {
+        if (settled) return;
         const raw = (now - startTime) / durationMs;
         const t = Math.min(1, Math.max(0, raw));
 
@@ -409,26 +443,14 @@ export class DiceActor3D {
         }
 
         if (t < 1) {
-          requestAnimationFrame(step);
+          rafId = requestAnimationFrame(step);
           return;
         }
 
-        for (const a of anims) {
-          a.obj.position.copy(a.endPos);
-          a.obj.quaternion.copy(a.endQuat);
-        }
-
-        this.isRolling = false;
-
-        if (isDouble) {
-          gameAudio.playDoubleSparkle();
-          this.haloProgress = 0;
-          this.spawnImpactSparks(new THREE.Vector3(0, 0.1, DICE_ZONE_Z), 22, '#FBBF24');
-        }
-        resolve();
+        finish(true);
       };
 
-      requestAnimationFrame(step);
+      rafId = requestAnimationFrame(step);
     });
   }
 
@@ -496,6 +518,10 @@ export class DiceActor3D {
   }
 
   public dispose(): void {
+    if (this.activeRollCancel) {
+      this.activeRollCancel();
+      this.activeRollCancel = null;
+    }
     for (const sp of this.sparks) {
       this.group.remove(sp.mesh);
       (sp.mesh.material as THREE.Material).dispose();

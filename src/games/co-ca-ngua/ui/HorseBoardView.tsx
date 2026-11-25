@@ -294,10 +294,22 @@ export function HorseBoardView({
       });
 
       return new Promise((resolve) => {
+        let settled = false;
+        let rafId = 0;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(safetyTimer);
+          cancelAnimationFrame(rafId);
+          if (mountedRef.current) setFlyingFx(null);
+          resolve();
+        };
+        const safetyTimer = setTimeout(finish, Math.max(opts.durationMs + 450, 700));
         const startTime = performance.now();
         const step = (now: number) => {
+          if (settled) return;
           if (!mountedRef.current) {
-            resolve();
+            finish();
             return;
           }
           const t = Math.min(1, Math.max(0, (now - startTime) / opts.durationMs));
@@ -327,13 +339,12 @@ export function HorseBoardView({
           }
 
           if (t < 1) {
-            requestAnimationFrame(step);
+            rafId = requestAnimationFrame(step);
           } else {
-            setFlyingFx(null);
-            resolve();
+            finish();
           }
         };
-        requestAnimationFrame(step);
+        rafId = requestAnimationFrame(step);
       });
     },
     [],
@@ -581,19 +592,30 @@ export function HorseBoardView({
       isAnimatingRef.current = true;
       setIsAnimating(true);
 
-      if (broadcastToOnline && onlineContext) {
-        onlineContext.onCommitAction(actor.color, resolvedAction, nextState);
-      }
-
       const prevHorses = current.horses;
       canonicalRef.current = nextState;
 
-      await playAnimationSteps(prevHorses, nextState, steps);
-      if (!mountedRef.current) return;
-
-      setCanonicalState(nextState);
-      isAnimatingRef.current = false;
-      setIsAnimating(false);
+      try {
+        if (broadcastToOnline && onlineContext) {
+          onlineContext.onCommitAction(actor.color, resolvedAction, nextState);
+        }
+        await playAnimationSteps(prevHorses, nextState, steps);
+      } catch (err) {
+        console.error('[CoCaNgua] Loi dien hoat nuoc di, phuc hoi trang thai:', err);
+        if (mountedRef.current) {
+          setFlyingFx(null);
+          setHoppingHorseId(null);
+          setIsBoardShaking(false);
+          setPlaybackHorses(nextState.horses);
+          setDisplayDiceValue(nextState.lastDiceValue);
+        }
+      } finally {
+        isAnimatingRef.current = false;
+        if (mountedRef.current) {
+          setCanonicalState(nextState);
+          setIsAnimating(false);
+        }
+      }
     },
     [onlineContext, playAnimationSteps],
   );
@@ -612,28 +634,43 @@ export function HorseBoardView({
         setIsAnimating(true);
         setHintResult(null);
 
-        if (check.valid) {
-          const { state: verifiedNext, steps } = reduceCoCaNguaAction(current, ev.action);
-          const prevHorses = current.horses;
-          canonicalRef.current = verifiedNext;
-          await playAnimationSteps(prevHorses, verifiedNext, steps);
-          if (mountedRef.current) {
-            setCanonicalState(verifiedNext);
+        try {
+          if (check.valid) {
+            const { state: verifiedNext, steps } = reduceCoCaNguaAction(current, ev.action);
+            const prevHorses = current.horses;
+            canonicalRef.current = verifiedNext;
+            await playAnimationSteps(prevHorses, verifiedNext, steps);
+            if (mountedRef.current) {
+              setCanonicalState(verifiedNext);
+            }
+          } else if (ev.resultingState) {
+            canonicalRef.current = ev.resultingState;
+            setPlaybackHorses(ev.resultingState.horses);
+            setDisplayDiceValue(ev.resultingState.lastDiceValue);
+            setCanonicalState(ev.resultingState);
           }
-        } else if (ev.resultingState) {
-          canonicalRef.current = ev.resultingState;
-          setPlaybackHorses(ev.resultingState.horses);
-          setDisplayDiceValue(ev.resultingState.lastDiceValue);
-          setCanonicalState(ev.resultingState);
-        }
-
-        if (mountedRef.current) {
+        } catch (err) {
+          console.error('[CoCaNgua] Loi dien hoat nuoc di tu xa, phuc hoi:', err);
+          if (mountedRef.current) {
+            setFlyingFx(null);
+            setHoppingHorseId(null);
+            setIsBoardShaking(false);
+            setPlaybackHorses(canonicalRef.current.horses);
+            setCanonicalState(canonicalRef.current);
+          }
+        } finally {
           isAnimatingRef.current = false;
-          setIsAnimating(false);
+          if (mountedRef.current) {
+            setIsAnimating(false);
+          }
         }
       }
     } finally {
       processingRemoteRef.current = false;
+      isAnimatingRef.current = false;
+      if (mountedRef.current) {
+        setIsAnimating(false);
+      }
     }
   }, [playAnimationSteps]);
 
@@ -644,6 +681,12 @@ export function HorseBoardView({
       void drainRemoteQueue();
     });
   }, [onlineContext, drainRemoteQueue]);
+
+  useEffect(() => {
+    if (!isAnimating && remoteQueueRef.current.length > 0) {
+      void drainRemoteQueue();
+    }
+  }, [isAnimating, drainRemoteQueue]);
 
   const currentPlayer = canonicalState.players[canonicalState.currentPlayerIndex];
 
@@ -657,7 +700,12 @@ export function HorseBoardView({
     if (mode === 'vs-bot') return currentPlayer.isBot;
     if (mode === 'pass-and-play') return false;
     if (mode === 'online' && onlineContext) {
-      if (!onlineContext.isHost) return false;
+      // Nếu Chủ phòng vẫn kết nối -> Chủ phòng điều phối Bot; nếu Chủ phòng mất mạng -> Khách đầu tiên còn kết nối tự tiếp quản để không kẹt bàn!
+      const hostMember = onlineContext.snapshot.humans.find((h) => h.isHost);
+      const isOnlineBotCoordinator = hostMember?.connected
+        ? onlineContext.isHost
+        : onlineContext.snapshot.humans.find((h) => h.connected)?.color === onlineContext.localColor;
+      if (!isOnlineBotCoordinator) return false;
       return currentPlayer.isBot || Boolean(currentOnlineHuman?.botTakeover);
     }
     return false;

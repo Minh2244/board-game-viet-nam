@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { soundEngine, useAudioStore } from '@/shared/audio/soundEngine';
 import { cryptoRandomInt } from '@/shared/crypto/random';
@@ -229,6 +229,13 @@ export default function OAnQuanGame({ onExitToHub }: GameComponentProps) {
           onRemoteMove: (ev) => {
             remoteMoveHandlerRef.current?.(ev);
           },
+          onStateResync: (authoritativeState) => {
+            setActiveMatch((prev) =>
+              prev?.mode === 'online'
+                ? { ...prev, state: authoritativeState, key: prev.key + 1 }
+                : prev,
+            );
+          },
           onRoomClosed: (reason) => {
             onlineClientRef.current = null;
             syncRoomUrl(null);
@@ -423,6 +430,31 @@ export default function OAnQuanGame({ onExitToHub }: GameComponentProps) {
     [],
   );
 
+  const onlineContext = useMemo<OAnQuanOnlineContext | undefined>(() => {
+    if (activeMatch?.mode !== 'online' || !onlineSnapshot || !onlineClientRef.current) {
+      return undefined;
+    }
+    const me = onlineSnapshot.members.find((m) => m.playerToken === myToken);
+    return {
+      roomCode: onlineSnapshot.roomCode,
+      localSide: me?.side ?? 0,
+      isHost: onlineClientRef.current.isHost,
+      snapshot: onlineSnapshot,
+      onCommitLocalMove: handleCommitLocalOnlineMove,
+      onSyncRemoteVerifiedState: handleSyncRemoteVerifiedState,
+      registerRemoteMoveHandler,
+      onDissolveRoom: handleDissolveRoom,
+    };
+  }, [
+    activeMatch?.mode,
+    onlineSnapshot,
+    myToken,
+    handleCommitLocalOnlineMove,
+    handleSyncRemoteVerifiedState,
+    registerRemoteMoveHandler,
+    handleDissolveRoom,
+  ]);
+
   // 0. Đang khôi phục phòng Online sau khi F5
   if (autoRestoringCode) {
     return (
@@ -439,21 +471,6 @@ export default function OAnQuanGame({ onExitToHub }: GameComponentProps) {
 
   // 1. Đang chơi ván Ô Ăn Quan (Offline hoặc Online)
   if (activeMatch) {
-    let onlineContext: OAnQuanOnlineContext | undefined;
-    if (activeMatch.mode === 'online' && onlineSnapshot && onlineClientRef.current) {
-      const me = onlineSnapshot.members.find((m) => m.playerToken === myToken);
-      onlineContext = {
-        roomCode: onlineSnapshot.roomCode,
-        localSide: me?.side ?? 0,
-        isHost: onlineClientRef.current.isHost,
-        snapshot: onlineSnapshot,
-        onCommitLocalMove: handleCommitLocalOnlineMove,
-        onSyncRemoteVerifiedState: handleSyncRemoteVerifiedState,
-        registerRemoteMoveHandler,
-        onDissolveRoom: handleDissolveRoom,
-      };
-    }
-
     return (
       <GameBoardView
         key={activeMatch.key}

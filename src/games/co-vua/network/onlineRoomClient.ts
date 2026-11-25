@@ -2,6 +2,8 @@ import { cryptoRandomInt } from '@/shared/crypto/random';
 import { AblyFastLane } from '@/shared/network/ablyFastLane';
 import {
   createAdaptiveCheckpointScheduler,
+  createOrderedActionBuffer,
+  fetchJsonWithTimeout,
   getAdaptiveBackupPollIntervalMs,
   hasAllConnectedPeersRtcOpen,
   postWithRetry,
@@ -179,19 +181,16 @@ export function clearPersistedChessSession(): void {
 }
 
 async function apiPostRoom(body: Record<string, unknown>): Promise<{ status: number; data: ApiRoomResponse }> {
-  const res = await fetch('/api/room', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  });
-  let data: ApiRoomResponse = {};
-  try {
-    data = (await res.json()) as ApiRoomResponse;
-  } catch {
-    data = { ok: false, message: `Lỗi máy chủ (${res.status}).` };
-  }
-  return { status: res.status, data };
+  return fetchJsonWithTimeout<ApiRoomResponse>(
+    '/api/room',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    },
+    8000,
+  );
 }
 
 async function apiGetRoom(
@@ -203,20 +202,18 @@ async function apiGetRoom(
   const qs = new URLSearchParams({ game: GAME_NAMESPACE, code, sinceSeq: String(sinceSeq) });
   if (full) qs.set('full', '1');
   if (!full && waitMs > 0) qs.set('waitMs', String(waitMs));
-  const res = await fetch(`/api/room?${qs.toString()}`, { cache: 'no-store' });
-  let data: ApiRoomResponse = {};
-  try {
-    data = (await res.json()) as ApiRoomResponse;
-  } catch {
-    data = { ok: false, message: `Lỗi máy chủ (${res.status}).` };
-  }
-  return { status: res.status, data };
+  return fetchJsonWithTimeout<ApiRoomResponse>(
+    `/api/room?${qs.toString()}`,
+    { cache: 'no-store' },
+    Math.max(8000, waitMs + 7000),
+  );
 }
 
 export interface ChessOnlineCallbacks {
   onSnapshot: (snapshot: ChessRoomSnapshot) => void;
   onStatusChange: (status: OnlineTransportStatus, message: string) => void;
   onRemoteAction: (event: RemoteChessActionEvent) => void;
+  onStateResync?: (state: ChessState, matchVersion: number) => void;
   onRoomClosed: (reason: string) => void;
   onPeerJoined?: (memberName: string) => void;
 }
@@ -253,6 +250,10 @@ export class ChessOnlineClient {
   private rtcPeers = new Map<string, PeerChannelState>();
   private checkpointScheduler: AdaptiveCheckpointScheduler | null = null;
   private joinPollAttempts = 0;
+  private orderedActionBuffer =
+    createOrderedActionBuffer<Extract<WirePacket, { type: 'ACTION_COMMIT' }>>();
+  private gapRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private gapRecoveryInFlight = false;
 
   constructor(options: {
     roomCode: string;
@@ -423,16 +424,78 @@ export class ChessOnlineClient {
     if (!snap.matchState || !Array.isArray(events) || events.length === 0) return snap;
     let state = snap.matchState;
     let ver = snap.matchVersion;
-    for (const row of events) {
-      const pkt = row?.packet;
-      if (!pkt || pkt.type !== 'ACTION_COMMIT' || pkt.matchVersion <= ver) continue;
-      if (this.seenActionIds.has(pkt.actionId)) continue;
+    const actionPackets = events
+      .map((row) => row?.packet)
+      .filter(
+        (pkt): pkt is Extract<WirePacket, { type: 'ACTION_COMMIT' }> =>
+          Boolean(pkt && pkt.type === 'ACTION_COMMIT'),
+      )
+      .sort((a, b) => a.matchVersion - b.matchVersion);
+
+    for (const pkt of actionPackets) {
+      if (pkt.matchVersion <= ver) continue;
       this.seenActionIds.add(pkt.actionId);
       const reduced = reduceChessAction(state, pkt.action);
       state = reduced !== state ? { ...reduced, undoStack: [] } : pkt.resultingState ?? state;
       ver = pkt.matchVersion;
     }
     return { ...snap, matchState: state, matchVersion: ver };
+  }
+
+  private clearGapRecoveryTimer(): void {
+    if (this.gapRecoveryTimer !== null) {
+      clearTimeout(this.gapRecoveryTimer);
+      this.gapRecoveryTimer = null;
+    }
+  }
+
+  private scheduleGapRecovery(): void {
+    if (this.destroyed || this.gapRecoveryTimer !== null) return;
+    this.gapRecoveryTimer = setTimeout(() => {
+      this.gapRecoveryTimer = null;
+      if (!this.destroyed && this.orderedActionBuffer.hasPending()) {
+        void this.recoverFromVersionGap();
+      }
+    }, 2200);
+  }
+
+  private applyAuthoritativeSnapshotResync(
+    serverSnapshot: ChessRoomSnapshot,
+    events?: ApiEventRow[],
+  ): boolean {
+    if (serverSnapshot.phase !== 'PLAYING' || !serverSnapshot.matchState) return false;
+    const recovered = this.replayMissedActionsIntoSnapshot(serverSnapshot, events);
+    const curVer = this.snapshot?.matchVersion ?? 0;
+    if (!recovered.matchState || recovered.matchVersion <= curVer) return false;
+
+    this.orderedActionBuffer.dropThrough(recovered.matchVersion);
+    if (!this.orderedActionBuffer.hasPending()) {
+      this.clearGapRecoveryTimer();
+    }
+    this.snapshot = recovered;
+    this.emitSnapshot();
+    this.callbacks.onStateResync?.(recovered.matchState, recovered.matchVersion);
+    return true;
+  }
+
+  private async recoverFromVersionGap(): Promise<void> {
+    if (this.destroyed || this.gapRecoveryInFlight) return;
+    this.gapRecoveryInFlight = true;
+    try {
+      const { status, data } = await apiGetRoom(this.roomCode, 0, true, 0);
+      if (this.destroyed || status !== 200 || !data.ok) return;
+      this.ingestHeartbeats(data.heartbeats);
+      if (typeof data.seq === 'number' && data.seq > this.lastSeq) {
+        this.lastSeq = data.seq;
+      }
+      if (data.snapshot) {
+        this.applyAuthoritativeSnapshotResync(data.snapshot, data.events);
+      }
+    } catch {
+      // Thử lại ở vòng poll tiếp theo
+    } finally {
+      this.gapRecoveryInFlight = false;
+    }
   }
 
   private hasAllPeersRtcOpen(): boolean {
@@ -578,6 +641,8 @@ export class ChessOnlineClient {
       this.checkpointScheduler.cancel();
       this.checkpointScheduler = null;
     }
+    this.clearGapRecoveryTimer();
+    this.orderedActionBuffer.clear();
     if (this.ablyLane) {
       this.ablyLane.destroy();
       this.ablyLane = null;
@@ -729,7 +794,32 @@ export class ChessOnlineClient {
         }
         this.ingestHeartbeats(data.heartbeats);
         if (typeof data.seq === 'number' && data.seq > this.lastSeq) this.lastSeq = data.seq;
-        if (Array.isArray(data.events)) {
+        let resyncedFromSnapshot = false;
+        if (
+          this.joinResolved &&
+          this.snapshot?.phase === 'PLAYING' &&
+          data.snapshot?.phase === 'PLAYING' &&
+          data.snapshot.matchState
+        ) {
+          const curVer = this.snapshot.matchVersion;
+          const futureEventVersions = Array.isArray(data.events)
+            ? data.events
+                .map((r) => r.packet)
+                .filter(
+                  (p): p is Extract<WirePacket, { type: 'ACTION_COMMIT' }> =>
+                    Boolean(p && p.type === 'ACTION_COMMIT' && p.matchVersion > curVer),
+                )
+                .map((p) => p.matchVersion)
+            : [];
+          const minEventVer = futureEventVersions.length > 0 ? Math.min(...futureEventVersions) : null;
+          const hasUnrecoverableGap =
+            (minEventVer !== null && minEventVer > curVer + 1) ||
+            (minEventVer === null && data.snapshot.matchVersion > curVer);
+          if (hasUnrecoverableGap) {
+            resyncedFromSnapshot = this.applyAuthoritativeSnapshotResync(data.snapshot, data.events);
+          }
+        }
+        if (!resyncedFromSnapshot && Array.isArray(data.events)) {
           for (const row of data.events) {
             if (this.destroyed) return;
             if (row.packet) this.handleIncomingPacket(row.packet);
@@ -772,6 +862,11 @@ export class ChessOnlineClient {
     if (packet.senderToken === this.playerToken) return;
     if (this.seenMsgIds.has(packet.msgId)) return;
     this.seenMsgIds.add(packet.msgId);
+    if (this.seenMsgIds.size > 400) {
+      Array.from(this.seenMsgIds)
+        .slice(0, 150)
+        .forEach((id) => this.seenMsgIds.delete(id));
+    }
     this.lastSeenMap.set(packet.senderToken, Date.now());
 
     switch (packet.type) {
@@ -850,27 +945,31 @@ export class ChessOnlineClient {
       case 'ACTION_COMMIT': {
         if (this.seenActionIds.has(packet.actionId)) return;
         this.seenActionIds.add(packet.actionId);
-        let resolvedNext = packet.resultingState;
-        if (!resolvedNext && this.snapshot?.matchState) {
-          const reduced = reduceChessAction(this.snapshot.matchState, packet.action);
-          resolvedNext = reduced !== this.snapshot.matchState ? { ...reduced, undoStack: [] } : this.snapshot.matchState;
+        if (this.seenActionIds.size > 400) {
+          Array.from(this.seenActionIds)
+            .slice(0, 150)
+            .forEach((id) => this.seenActionIds.delete(id));
         }
-        if (this.snapshot && resolvedNext) {
-          this.snapshot = {
-            ...this.snapshot,
-            phase: 'PLAYING',
-            matchState: resolvedNext,
-            matchVersion: Math.max(this.snapshot.matchVersion, packet.matchVersion),
-            updatedAt: Date.now(),
-          };
-          if (this.isHost) this.scheduleCheckpoint();
+        const currentVer = this.snapshot?.matchVersion ?? 0;
+        if (this.snapshot?.phase === 'PLAYING') {
+          const ingest = this.orderedActionBuffer.ingest(packet.matchVersion, currentVer, packet);
+          if (ingest.status === 'stale') {
+            return;
+          }
+          if (ingest.status === 'buffered_gap') {
+            this.scheduleNextPoll(20);
+            this.scheduleGapRecovery();
+            return;
+          }
+          for (const orderedPkt of ingest.orderedPackets) {
+            this.applySequentialActionCommit(orderedPkt);
+          }
+          if (!this.orderedActionBuffer.hasPending()) {
+            this.clearGapRecoveryTimer();
+          }
+          break;
         }
-        this.callbacks.onRemoteAction({
-          actionId: packet.actionId,
-          action: packet.action,
-          resultingState: resolvedNext,
-          matchVersion: packet.matchVersion,
-        });
+        this.applySequentialActionCommit(packet);
         break;
       }
       case 'LEAVE_ROOM': {
@@ -908,6 +1007,30 @@ export class ChessOnlineClient {
         break;
       }
     }
+  }
+
+  private applySequentialActionCommit(packet: Extract<WirePacket, { type: 'ACTION_COMMIT' }>): void {
+    let resolvedNext = packet.resultingState;
+    if (!resolvedNext && this.snapshot?.matchState) {
+      const reduced = reduceChessAction(this.snapshot.matchState, packet.action);
+      resolvedNext = reduced !== this.snapshot.matchState ? { ...reduced, undoStack: [] } : this.snapshot.matchState;
+    }
+    if (this.snapshot && resolvedNext) {
+      this.snapshot = {
+        ...this.snapshot,
+        phase: 'PLAYING',
+        matchState: resolvedNext,
+        matchVersion: Math.max(this.snapshot.matchVersion, packet.matchVersion),
+        updatedAt: Date.now(),
+      };
+      if (this.isHost) this.scheduleCheckpoint();
+    }
+    this.callbacks.onRemoteAction({
+      actionId: packet.actionId,
+      action: packet.action,
+      resultingState: resolvedNext,
+      matchVersion: packet.matchVersion,
+    });
   }
 
   private emitSnapshot(): void {
@@ -949,9 +1072,18 @@ export class ChessOnlineClient {
         },
         onAvailabilityChange: (available) => {
           this.ablyConnected = available;
-          if (!available && !this.destroyed) {
+          if (available) {
+            this.closeAllRtcPeers();
+          } else if (!this.destroyed) {
+            this.ensureRtcPeers();
             this.scheduleNextPoll(25);
           }
+        },
+        onFallbackNeeded: () => {
+          if (this.destroyed) return;
+          this.ablyConnected = false;
+          this.ensureRtcPeers();
+          this.scheduleNextPoll(25);
         },
       });
       void this.ablyLane.start();
@@ -972,12 +1104,42 @@ export class ChessOnlineClient {
     this.ensureRtcPeers();
   }
 
+  private closeAllRtcPeers(): void {
+    if (this.rtcPeers.size === 0) return;
+    for (const peer of this.rtcPeers.values()) {
+      try {
+        peer.dc?.close();
+        peer.pc.close();
+      } catch {
+        // Ignore
+      }
+    }
+    this.rtcPeers.clear();
+  }
+
   private ensureRtcPeers(): void {
     if (this.destroyed || isFastLaneDisabled() || !this.snapshot || typeof RTCPeerConnection === 'undefined') return;
+    if (this.ablyConnected || this.ablyLane?.shouldPreferAbly()) {
+      if (this.ablyConnected) this.closeAllRtcPeers();
+      return;
+    }
+    const activeTokens = new Set<string>();
     for (const h of this.snapshot.humans) {
       if (h.playerToken === this.playerToken || !h.connected) continue;
+      activeTokens.add(h.playerToken);
       if (this.playerToken < h.playerToken && !this.rtcPeers.has(h.playerToken)) {
         this.getOrCreateRtcPeer(h.playerToken, true);
+      }
+    }
+    for (const [token, peer] of this.rtcPeers.entries()) {
+      if (!activeTokens.has(token)) {
+        try {
+          peer.dc?.close();
+          peer.pc.close();
+        } catch {
+          // Ignore
+        }
+        this.rtcPeers.delete(token);
       }
     }
   }
@@ -1034,6 +1196,7 @@ export class ChessOnlineClient {
   }
 
   private async handleRtcSignal(remoteToken: string, signal: RtcSignalPayload): Promise<void> {
+    if (this.ablyConnected || this.destroyed) return;
     const peer = this.getOrCreateRtcPeer(remoteToken, false);
     if (!peer || this.destroyed) return;
     const { pc } = peer;

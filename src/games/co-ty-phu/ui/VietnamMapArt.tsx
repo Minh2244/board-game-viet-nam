@@ -19,7 +19,10 @@ const VAN_DON_PATH =
 
 export const VietnamMapArt = memo(function VietnamMapArt() {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden">
+    <div
+      className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden"
+      style={{ contain: 'layout style paint' }}
+    >
       {/* Lưới hải đồ cổ điển + sóng Biển Đông nhẹ + hoa gió la bàn */}
       <svg
         viewBox="0 0 1100 560"
@@ -57,9 +60,10 @@ export const VietnamMapArt = memo(function VietnamMapArt() {
         </g>
       </svg>
 
-      {/* Hoa văn Trống Đồng Đông Sơn xoay chậm sắc nét (tự đứng tĩnh trên ĐT để tiết kiệm 100% GPU) */}
+      {/* Hoa văn Trống Đồng Đông Sơn xoay chậm sắc nét trên lớp GPU riêng biệt */}
       <svg
         viewBox="0 0 520 520"
+        style={{ willChange: 'transform', contain: 'layout style paint' }}
         className="drum-spin-slow absolute h-[395px] w-[395px] animate-[spin_105s_linear_infinite] opacity-[0.23]"
       >
         <circle cx="260" cy="260" r="244" fill="none" stroke="#FDE68A" strokeWidth="2.4" strokeDasharray="12 6" />
