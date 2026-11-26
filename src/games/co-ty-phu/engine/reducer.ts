@@ -3,7 +3,7 @@ import { COLOR_GROUPS } from '../data/boardData';
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '../data/cards';
 import { LAND_COLORS } from '../data/characters';
 import { generateBoardTiles, pickRandomPropertyDestination } from '../data/mapGenerator';
-import { rollSmartHumanDice } from './smartDice';
+import { rollMonopolyDice } from './smartDice';
 import {
   AUCTION_BID_INCREMENT,
   AUCTION_START_PRICE,
@@ -787,17 +787,6 @@ function resolveTileLanding(
   }
 }
 
-function rollCryptoDice(diceCount: 1 | 2, injected?: number[]): number[] {
-  if (injected && injected.length === diceCount) {
-    return [...injected];
-  }
-  const out: number[] = [];
-  for (let i = 0; i < diceCount; i += 1) {
-    out.push(cryptoRandomInt(1, 6));
-  }
-  return out;
-}
-
 export function reduceGameAction(
   prevState: GameState,
   action: GameAction,
@@ -817,9 +806,11 @@ export function reduceGameAction(
       const dice =
         action.diceValues && action.diceValues.length === state.diceCount
           ? [...action.diceValues]
-          : current.isBot
-            ? rollCryptoDice(state.diceCount)
-            : rollSmartHumanDice(state, current, { rollPower: action.rollPower, forJail: false });
+          : rollMonopolyDice(state, current, {
+              rollPower: action.rollPower,
+              forJail: false,
+              isBot: current.isBot,
+            });
       const total = dice.reduce((a, b) => a + b, 0);
       const isDouble = state.diceCount === 2 && dice[0] === dice[1];
 
@@ -881,9 +872,11 @@ export function reduceGameAction(
       const dice =
         action.diceValues && action.diceValues.length === state.diceCount
           ? [...action.diceValues]
-          : current.isBot
-            ? rollCryptoDice(state.diceCount)
-            : rollSmartHumanDice(state, current, { rollPower: action.rollPower, forJail: true });
+          : rollMonopolyDice(state, current, {
+              rollPower: action.rollPower,
+              forJail: true,
+              isBot: current.isBot,
+            });
       const total = dice.reduce((a, b) => a + b, 0);
       const isDouble = state.diceCount === 2 && dice[0] === dice[1];
       const escaped = state.diceCount === 2 ? isDouble : dice[0] === 6;

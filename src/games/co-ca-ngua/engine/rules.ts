@@ -32,19 +32,37 @@ export function shouldBoostDeployDice(horses: readonly HorsePiece[], color: Hors
   return !hasLowStairHorse;
 }
 
+/** Mốc lượt kích hoạt âm thầm giai đoạn Tăng Tốc Toàn Diện (từ Lượt 101+ trở đi) */
+export const LATE_GAME_TURNS_THRESHOLD = 100;
+
 /**
  * Tung xúc xắc thông minh cho Cờ Cá Ngựa (áp dụng công bằng chung cho cả bàn để đẩy tiến độ mượt mà, giữ 100% luật 4 ngựa 3–4–5–6):
- * 1. Khi chưa có ngựa ra đường đua (đang cần 1 hoặc 6 để xuất chuồng): tỉ lệ ra {1, 6} = 60% (30% ra 1, 30% ra 6).
- * 2. Khi mới có 1 ngựa ngoài đường đua & vẫn còn >= 2 ngựa trong chuồng: tăng nhẹ {1, 6} lên ~44% để ra quân đều tay hơn.
- * 3. Khi có ngựa áp sát Cửa Lên Bụt ★ (cách 1..6 ô), đang đứng tại Cửa ★ chờ leo bậc thắng 3–6 trống,
- *    hoặc kẹt bậc 1–2 cần đổi lên bậc 3–6 trống: tăng nhẹ trọng số (×1.65) cho các mặt giúp về cửa / lên bậc thắng!
+ * - Lượt 1–100:
+ *   1. Khi chưa có ngựa ra đường đua: tỉ lệ ra {1, 6} = 60% (30% ra 1, 30% ra 6).
+ *   2. Khi mới có 1 ngựa ngoài đường đua & vẫn còn >= 2 ngựa trong chuồng: tăng nhẹ {1, 6} lên ~44%.
+ *   3. Khi có ngựa áp sát Cửa Lên Bụt ★, đứng tại Cửa ★ hoặc kẹt bậc 1–2: nhân ×1.65 cho mặt về cửa / lên bậc thắng 3–6.
+ * - Từ Lượt 101+ (turnCount > 100 — chạy âm thầm):
+ *   1. Nếu chưa có ngựa chạy ngoài đường đua: giữ ưu tiên {1, 6} = 64% (32% / 32%).
+ *   2. Khi đang chạy trên đường đua: ưu tiên mặt lớn 5–6 (×1.75) và mặt 4 (×1.35) để về cửa nhanh hơn.
+ *   3. Mặt về đúng Ô ★ / leo thẳng hoặc đổi lên bậc thắng 3–6: tăng từ ×1.65 lên ×2.8.
+ *   4. Mặt có nước ĐÁ ngựa đối phương: nhân thêm ×1.6.
  */
 export function rollSmartHorseDice(state: CoCaNguaState): number {
   const current = state.players[state.currentPlayerIndex];
   if (!current) return cryptoRandomInt(1, 6);
 
+  const isLateGame = state.turnCount > LATE_GAME_TURNS_THRESHOLD;
+
   if (shouldBoostDeployDice(state.horses, current.color)) {
     const r = cryptoRandomInt(1, 100);
+    if (isLateGame) {
+      if (r <= 32) return 1;
+      if (r <= 64) return 6;
+      if (r <= 73) return 2;
+      if (r <= 82) return 3;
+      if (r <= 91) return 4;
+      return 5;
+    }
     if (r <= 30) return 1;
     if (r <= 60) return 6;
     if (r <= 70) return 2;
@@ -56,6 +74,7 @@ export function rollSmartHorseDice(state: CoCaNguaState): number {
   const own = state.horses.filter((h) => h.color === current.color);
   const stableCount = own.filter((h) => h.zone === 'STABLE').length;
   const trackCount = own.filter((h) => h.zone === 'TRACK').length;
+  const hasRacingHorse = own.some((h) => h.zone === 'TRACK' && h.progress < SAFE_DOOR_PROGRESS);
 
   const weights = [100, 100, 100, 100, 100, 100];
   if (trackCount === 1 && stableCount >= 2) {
@@ -64,23 +83,37 @@ export function rollSmartHorseDice(state: CoCaNguaState): number {
     weights[5] = 157;
   }
 
+  if (isLateGame && hasRacingHorse) {
+    weights[3] = Math.round(weights[3] * 1.35);
+    weights[4] = Math.round(weights[4] * 1.75);
+    weights[5] = Math.round(weights[5] * 1.75);
+  }
+
   const hasDoorOrStairGoal = own.some(
     (h) =>
       (h.zone === 'TRACK' && h.progress >= SAFE_DOOR_PROGRESS - 6) ||
-      (h.zone === 'HOME_STAIRS' && h.stairStep <= 2),
+      (h.zone === 'HOME_STAIRS' && (isLateGame ? h.stairStep <= 5 : h.stairStep <= 2)),
   );
 
-  if (hasDoorOrStairGoal) {
+  if (hasDoorOrStairGoal || isLateGame) {
+    const goalMult = isLateGame ? 2.8 : 1.65;
     for (let face = 1; face <= 6; face += 1) {
       const legal = computeLegalHorseMoves(state.horses, current.color, face);
-      const hitsGoal = legal.some(
-        (m) =>
-          (m.kind === 'ADVANCE_TRACK' && m.toProgress === SAFE_DOOR_PROGRESS) ||
-          (m.kind === 'ENTER_STAIRS' && m.toStairStep >= 3) ||
-          (m.kind === 'CLIMB_STAIRS' && m.fromStairStep <= 2 && m.toStairStep >= 3),
-      );
+      const hitsGoal =
+        hasDoorOrStairGoal &&
+        legal.some(
+          (m) =>
+            (m.kind === 'ADVANCE_TRACK' && m.toProgress === SAFE_DOOR_PROGRESS) ||
+            (m.kind === 'ENTER_STAIRS' && m.toStairStep >= 3) ||
+            (m.kind === 'CLIMB_STAIRS' &&
+              m.toStairStep >= 3 &&
+              (m.fromStairStep <= 2 || (isLateGame && m.toStairStep > m.fromStairStep))),
+        );
       if (hitsGoal) {
-        weights[face - 1] = Math.round(weights[face - 1] * 1.65);
+        weights[face - 1] = Math.round(weights[face - 1] * goalMult);
+      }
+      if (isLateGame && legal.some((m) => m.kickedHorseId !== null)) {
+        weights[face - 1] = Math.round(weights[face - 1] * 1.6);
       }
     }
   }

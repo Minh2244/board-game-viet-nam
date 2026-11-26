@@ -1,6 +1,9 @@
 import { cryptoRandomInt } from '@/shared/crypto/random';
 import { getUpgradeCost, playerOwnsFullColorGroup } from './rules';
-import type { GameState, PlayerState } from './types';
+import type { BoardTile, GameState, PlayerState } from './types';
+
+/** Mốc lượt kích hoạt giai đoạn Tăng Tốc âm thầm (từ Lượt 101+ trở đi) */
+export const LATE_GAME_TURNS_THRESHOLD = 100;
 
 /** Ngưỡng rollPower (từ handleCenterPointerUp) tương ứng giữ thanh lực >= 90% */
 export const MAX_CHARGE_POWER_THRESHOLD = 0.95;
@@ -33,20 +36,146 @@ function pickWeighted<T>(items: readonly T[], weights: readonly number[]): T {
   return items[items.length - 1];
 }
 
+/** Kiểm tra ô đất trống / Bến Xe có phải ô thiếu chốt Thắng Hàng, Bộ Màu ×2 hoặc 4/4 Bến Xe hay không */
+function isMissingKeyObjectiveTile(
+  state: GameState,
+  player: PlayerState,
+  tile: BoardTile,
+): boolean {
+  if (tile.kind === 'PROPERTY' && !tile.ownerId) {
+    const price = tile.basePrice ?? 1_000_000;
+    if (player.cash < price) return false;
+
+    if (tile.edge !== null) {
+      const edgeProps = state.tiles.filter((t) => t.edge === tile.edge && t.kind === 'PROPERTY');
+      if (
+        edgeProps.length >= 2 &&
+        edgeProps.every((t) => t.index === tile.index || t.ownerId === player.id)
+      ) {
+        return true;
+      }
+    }
+
+    if (tile.colorGroup !== undefined) {
+      const groupProps = state.tiles.filter(
+        (t) => t.kind === 'PROPERTY' && t.colorGroup === tile.colorGroup,
+      );
+      if (
+        groupProps.length >= 2 &&
+        groupProps.every((t) => t.index === tile.index || t.ownerId === player.id)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (tile.kind === 'AUCTION_STATION' && tile.auctionState?.status !== 'CLOSED') {
+    const closedOwnedCount = state.tiles.filter(
+      (t) =>
+        t.kind === 'AUCTION_STATION' &&
+        t.auctionState?.status === 'CLOSED' &&
+        t.auctionState.finalOwnerId === player.id,
+    ).length;
+    return closedOwnedCount === 3;
+  }
+
+  return false;
+}
+
+/** Trọng số Giai đoạn Tăng Tốc Lượt 101+ (âm thầm, áp dụng công bằng cho cả Người & Máy AI) */
+function getLateGameLandingTileWeight(
+  state: GameState,
+  player: PlayerState,
+  tile: BoardTile,
+): number {
+  switch (tile.kind) {
+    case 'PROPERTY': {
+      if (!tile.ownerId) {
+        if (isMissingKeyObjectiveTile(state, player, tile)) {
+          return 3.2;
+        }
+        const price = tile.basePrice ?? 1_000_000;
+        return player.cash >= price ? 2.2 : 1.0;
+      }
+
+      if (tile.ownerId === player.id) {
+        if (tile.buildingLevel < 5) {
+          const upgradeCost = getUpgradeCost(tile);
+          return player.cash >= upgradeCost ? 2.6 : 1.1;
+        }
+        return 1.0;
+      }
+
+      const owner = state.players.find((p) => p.id === tile.ownerId);
+      if (!owner || owner.isBankrupt || owner.inJail) {
+        return 1.0;
+      }
+
+      const hasMonopoly =
+        tile.colorGroup !== undefined &&
+        playerOwnsFullColorGroup(state.tiles, tile.ownerId, tile.colorGroup);
+      if (tile.buildingLevel >= 3 || hasMonopoly) {
+        return 1.35;
+      }
+      return 1.15;
+    }
+
+    case 'AIRPORT':
+      return 2.8;
+
+    case 'AUCTION_STATION': {
+      const auc = tile.auctionState;
+      if (!auc || auc.status !== 'CLOSED' || !auc.finalOwnerId) {
+        return isMissingKeyObjectiveTile(state, player, tile) ? 3.2 : 2.2;
+      }
+      if (auc.finalOwnerId === player.id) {
+        return 1.0;
+      }
+      const owner = state.players.find((p) => p.id === auc.finalOwnerId);
+      if (!owner || owner.isBankrupt || owner.inJail) {
+        return 1.0;
+      }
+      return 1.15;
+    }
+
+    case 'UTILITY': {
+      if (!tile.ownerId) {
+        return 1.8;
+      }
+      if (tile.ownerId === player.id) {
+        return 1.0;
+      }
+      const owner = state.players.find((p) => p.id === tile.ownerId);
+      if (!owner || owner.isBankrupt || owner.inJail) {
+        return 1.0;
+      }
+      return 1.15;
+    }
+
+    case 'HERITAGE':
+      return 1.6;
+
+    case 'CHANCE':
+    case 'FATE':
+      return 1.35;
+
+    case 'GO_TO_JAIL':
+      return 0.75;
+
+    case 'TAX':
+    case 'VISIT_JAIL':
+    case 'GO':
+    case 'FREE_PARKING':
+    default:
+      return 1.0;
+  }
+}
+
 /**
- * Gói A — Trọng số ô đích (chỉ áp dụng âm thầm cho Người chơi thật; Máy AI luôn 100% random):
- * - Nhà bản thân chưa max cấp (đủ tiền nâng cấp): x2.35 (Anti-Streak: x2.8) — dễ đạp lại để nâng nhà & Biệt Thự!
- * - Ô Sân Bay (AIRPORT): x2.3 (Anti-Streak: x2.6) — bay khắp bàn + nhận +3 Tr đẩy nhịp trận!
- * - Đất trống (mua được): x1.8 (Anti-Streak: x2.4)
- * - Cơ Hội / Khí Vận (nay cân bằng 50/50): x1.25 (Anti-Streak: x1.35)
- * - Di Sản / Bến Xe & Thủy Điện trống: x1.5 (Anti-Streak: x1.75)
- * - Ô trung tính (START, Trại Giam trống, nhà mình đã max cấp): x1.0
- * - Vô Tù (GO_TO_JAIL): x0.55 (Anti-Streak: x0.40) — giảm cảm giác xui đạp ô góc tù liên tục
- * - Thuế / Thăm tù mất phí: x0.75 (Anti-Streak: x0.60)
- * - Nhà / Bến Xe / Thủy Điện của đối thủ đang thu tiền thuê:
- *     + Nhà cấp cao (>= 3) hoặc đã gom đủ bộ màu x2: x0.42 (Anti-Streak: x0.18)
- *     + Nhà cấp 1–2 / Bến Xe / Thủy Điện đối thủ: x0.50 (Anti-Streak: x0.22)
- *     + Đất trống cấp 0 giá rẻ của đối thủ: x0.58 (Anti-Streak: x0.25)
+ * Trọng số ô đích:
+ * - Lượt 1–100: giữ nguyên 100% Gói A cho Người chơi thật (ưu tiên đất trống/nhà mình & giảm nhà đối thủ, kèm Anti-Streak).
+ * - Từ Lượt 101+ (turnCount > 100): kích hoạt âm thầm Tăng Tốc Kịch Tính (tắt né nhà đối thủ & đẩy mạnh ô thiếu thắng Hàng/Bộ Màu/Bến Xe, Sân Bay, nâng Biệt Thự).
  */
 export function getHumanLandingTileWeight(
   state: GameState,
@@ -56,6 +185,10 @@ export function getHumanLandingTileWeight(
 ): number {
   const tile = state.tiles[targetTileIndex];
   if (!tile) return 1.0;
+
+  if (state.turnCount > LATE_GAME_TURNS_THRESHOLD) {
+    return getLateGameLandingTileWeight(state, player, tile);
+  }
 
   switch (tile.kind) {
     case 'PROPERTY': {
@@ -251,4 +384,24 @@ export function rollSmartHumanDice(
   const allPairs = [...doubles, ...nonDoubles];
   const allWeights = [...doubleWeights, ...nonDoubleWeights];
   return [...pickWeighted(allPairs, allWeights)];
+}
+
+/**
+ * Hàm tung xúc xắc thống nhất cho cả Người chơi thật lẫn Máy AI (Offline & Online):
+ * - Lượt 1–100: Người thật dùng Gói A + Tụ lực; Máy AI giữ random 100%.
+ * - Từ Lượt 101+ (turnCount > 100): Cả Người lẫn Máy AI dùng chung trọng số Tăng Tốc Kịch Tính.
+ */
+export function rollMonopolyDice(
+  state: GameState,
+  player: PlayerState,
+  options?: { rollPower?: number; forJail?: boolean; isBot?: boolean },
+): number[] {
+  const isBot = options?.isBot ?? player.isBot;
+  if (isBot && state.turnCount <= LATE_GAME_TURNS_THRESHOLD) {
+    return Array.from({ length: state.diceCount }, () => cryptoRandomInt(1, 6));
+  }
+  return rollSmartHumanDice(state, player, {
+    rollPower: isBot ? Math.min(options?.rollPower ?? 0.56, 0.9) : options?.rollPower,
+    forJail: options?.forJail,
+  });
 }

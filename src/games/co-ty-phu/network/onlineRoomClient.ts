@@ -58,6 +58,31 @@ export interface PersistedOnlineSession {
 export interface DeckSyncPatch {
   chanceDeck?: string[];
   fateDeck?: string[];
+  /** Đồng bộ điểm đến Sân Bay ngẫu nhiên tiếp theo giữa các máy Online (key = tileIndex) */
+  airportDestinations?: Record<number, number>;
+}
+
+/** Áp dụng bản vá đồng bộ bộ bài & điểm đến Sân Bay sau khi chạy pure reducer trên máy nhận */
+export function applyOnlineSyncPatch(state: GameState, patch?: DeckSyncPatch): GameState {
+  if (!patch) return state;
+  const hasAirportPatch =
+    patch.airportDestinations && Object.keys(patch.airportDestinations).length > 0;
+  if (!patch.chanceDeck && !patch.fateDeck && !hasAirportPatch) {
+    return state;
+  }
+  return {
+    ...state,
+    chanceDeck: patch.chanceDeck ?? state.chanceDeck,
+    fateDeck: patch.fateDeck ?? state.fateDeck,
+    tiles: hasAirportPatch
+      ? state.tiles.map((tile) => {
+          const syncedDest = patch.airportDestinations?.[tile.index];
+          return syncedDest !== undefined
+            ? { ...tile, currentDestinationTileIndex: syncedDest }
+            : tile;
+        })
+      : state.tiles,
+  };
 }
 
 export interface RemoteGameActionEvent {
@@ -593,13 +618,7 @@ export class OnlineRoomClient {
       const { state: reduced } = reduceGameAction(state, pkt.action);
       state = pkt.resultingState
         ? pkt.resultingState
-        : pkt.deckSync
-          ? {
-              ...reduced,
-              chanceDeck: pkt.deckSync.chanceDeck ?? reduced.chanceDeck,
-              fateDeck: pkt.deckSync.fateDeck ?? reduced.fateDeck,
-            }
-          : reduced;
+        : applyOnlineSyncPatch(reduced, pkt.deckSync);
       ver = pkt.matchVersion;
     }
     return { ...snap, matchState: state, matchVersion: ver };
@@ -1143,13 +1162,7 @@ export class OnlineRoomClient {
     let resolvedNext = packet.resultingState;
     if (!resolvedNext && this.snapshot?.matchState) {
       const { state: reduced } = reduceGameAction(this.snapshot.matchState, packet.action);
-      resolvedNext = packet.deckSync
-        ? {
-            ...reduced,
-            chanceDeck: packet.deckSync.chanceDeck ?? reduced.chanceDeck,
-            fateDeck: packet.deckSync.fateDeck ?? reduced.fateDeck,
-          }
-        : reduced;
+      resolvedNext = applyOnlineSyncPatch(reduced, packet.deckSync);
     }
     if (this.snapshot && resolvedNext) {
       this.snapshot = {
@@ -1354,7 +1367,7 @@ export class OnlineRoomClient {
     this.seenActionIds.add(actionId);
     const nextVer = this.snapshot.matchVersion + 1;
 
-    // Chỉ đính kèm `deckSync` khi bộ bài vừa xáo lại (kể cả biên 1 lá trong discard -> deck) để đảm bảo 2 máy khớp 100%!
+    // Chỉ đính kèm `deckSync` khi bộ bài vừa xáo lại HOẶC điểm đến Sân Bay vừa random lại để 2 máy khớp 100%!
     const prevState = this.snapshot.matchState;
     let deckSync: DeckSyncPatch | undefined;
     if (prevState) {
@@ -1364,10 +1377,24 @@ export class OnlineRoomClient {
       const fateReshuffled =
         resultingState.fateDeck.length > prevState.fateDeck.length ||
         resultingState.fateDiscard.length < prevState.fateDiscard.length;
-      if (chanceReshuffled || fateReshuffled) {
+
+      let airportDestinations: Record<number, number> | undefined;
+      for (const nextTile of resultingState.tiles) {
+        if (nextTile.kind !== 'AIRPORT' || nextTile.currentDestinationTileIndex === undefined) {
+          continue;
+        }
+        const prevTile = prevState.tiles[nextTile.index];
+        if (prevTile?.currentDestinationTileIndex !== nextTile.currentDestinationTileIndex) {
+          airportDestinations ??= {};
+          airportDestinations[nextTile.index] = nextTile.currentDestinationTileIndex;
+        }
+      }
+
+      if (chanceReshuffled || fateReshuffled || airportDestinations) {
         deckSync = {
           ...(chanceReshuffled ? { chanceDeck: [...resultingState.chanceDeck] } : {}),
           ...(fateReshuffled ? { fateDeck: [...resultingState.fateDeck] } : {}),
+          ...(airportDestinations ? { airportDestinations } : {}),
         };
       }
     }

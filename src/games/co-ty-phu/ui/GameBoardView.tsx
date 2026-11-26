@@ -38,7 +38,7 @@ import { COLOR_GROUPS } from '../data/boardData';
 import { CO_TY_PHU_CHARACTERS } from '../data/characters';
 import { getLandmarkArtworkUrl } from '../data/landmarkArtwork';
 import { reduceGameAction } from '../engine/reducer';
-import { rollSmartHumanDice } from '../engine/smartDice';
+import { rollMonopolyDice } from '../engine/smartDice';
 import {
   AUCTION_BID_INCREMENT,
   formatShortVnd,
@@ -57,7 +57,9 @@ import {
 import type { BoardTile, CardDeckKind, GameAction, GameAnimEvent, GameState, PlayerState } from '../engine/types';
 import { saveOfflineGame } from '../lobby/offlineSave';
 import {
+  applyOnlineSyncPatch,
   ONLINE_DISCONNECT_GRACE_MS,
+  type DeckSyncPatch,
   type OnlineRoomSnapshot,
   type RemoteDiceChargeEvent,
   type RemoteGameActionEvent,
@@ -1838,15 +1840,12 @@ export function GameBoardView({
         if (mountedRef.current) {
           setAirportFlight(null);
           setActivePawnAnim(null);
-          setFlashingTileIdx(toIndex);
+          flashTileDom(toIndex, 420);
           spawnShockwave(p1.x, p1.y, landHex);
-          setTimeout(() => {
-            if (mountedRef.current) setFlashingTileIdx(null);
-          }, 420);
         }
       }
     },
-    [getTileCenter, spawnShockwave, stageW, stageH],
+    [flashTileDom, getTileCenter, spawnShockwave, stageW, stageH],
   );
 
   /** Diễn hoạt Bị Bắt Vào Tù (ô 16): bay thẳng tới Trại Giam + sập song sắt + rung nhẹ mặt bàn */
@@ -1953,7 +1952,7 @@ export function GameBoardView({
       rollPower = 0.58,
       remoteOverride?: {
         resultingState?: GameState;
-        deckSync?: { chanceDeck?: string[]; fateDeck?: string[] };
+        deckSync?: DeckSyncPatch;
       },
     ): Promise<boolean> => {
       if (isAnimatingRef.current) return false;
@@ -1987,12 +1986,11 @@ export function GameBoardView({
             const actingPlayer = prevState.players[prevState.currentPlayerIndex];
             const actingOnlineHuman = online.snapshot.humans.find((h) => h.seatId === actingPlayer?.id);
             const isBotRoll = Boolean(actingPlayer?.isBot || actingOnlineHuman?.botTakeover);
-            const diceValues = isBotRoll
-              ? Array.from({ length: prevState.diceCount }, () => cryptoRandomInt(1, 6))
-              : rollSmartHumanDice(prevState, actingPlayer, {
-                  rollPower,
-                  forJail: action.type === 'ROLL_FOR_JAIL',
-                });
+            const diceValues = rollMonopolyDice(prevState, actingPlayer, {
+              rollPower,
+              forJail: action.type === 'ROLL_FOR_JAIL',
+              isBot: isBotRoll,
+            });
             resolvedAction = { ...action, diceValues, rollPower };
           } else if (!online) {
             resolvedAction = { ...action, rollPower };
@@ -2002,13 +2000,7 @@ export function GameBoardView({
         const { state: reducedState, events } = reduceGameAction(prevState, resolvedAction);
         const nextState = remoteOverride?.resultingState
           ? remoteOverride.resultingState
-          : remoteOverride?.deckSync
-            ? {
-                ...reducedState,
-                chanceDeck: remoteOverride.deckSync.chanceDeck ?? reducedState.chanceDeck,
-                fateDeck: remoteOverride.deckSync.fateDeck ?? reducedState.fateDeck,
-              }
-            : reducedState;
+          : applyOnlineSyncPatch(reducedState, remoteOverride?.deckSync);
         finalNextState = nextState;
         latestStateRef.current = nextState;
 
@@ -3747,7 +3739,7 @@ export function GameBoardView({
                 transform: `translate3d(${airportFlight.startX}px, ${airportFlight.startY}px, 0) translate(-50%, -50%) scale(0.58)`,
                 willChange: 'transform',
               }}
-              className="absolute z-[52] drop-shadow-[0_26px_28px_rgba(0,0,0,0.72)]"
+              className="absolute z-[52]"
             >
               <GiantAirportJetSvg className="h-64 w-64" />
             </div>

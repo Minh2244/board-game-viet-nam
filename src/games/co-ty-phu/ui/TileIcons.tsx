@@ -459,6 +459,12 @@ export function GiantAirportJetSvg({ className = 'h-64 w-64' }: { className?: st
         </linearGradient>
       </defs>
 
+      {/* Bóng đổ tĩnh nội bộ SVG giúp bay 60fps mượt mà trên ĐT (không cần CSS filter drop-shadow tốn GPU!) */}
+      <g opacity="0.24" transform="translate(8, 12)">
+        <path d="M110 66 L10 120 L10 136 L102 108 L118 108 L210 136 L210 120 Z" fill="#020617" />
+        <path d="M110 12 C121 12 126 32 126 56 L124 166 C123 185 117 204 110 208 C103 204 97 185 96 166 L94 56 C94 32 99 12 110 12 Z" fill="#020617" />
+      </g>
+
       {/* 4 Động cơ phản lực dưới 2 cánh (2 trái, 2 phải) */}
       {[
         [66, 86],

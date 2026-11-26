@@ -13,6 +13,7 @@ import {
   assertHorseBoardInvariants,
   computeLegalHorseMoves,
   hasColorWon,
+  LATE_GAME_TURNS_THRESHOLD,
   rollSmartHorseDice,
   shouldBoostDeployDice,
 } from '../engine/rules';
@@ -419,5 +420,35 @@ describe('Cờ Cá Ngựa Engine — Bộ 15 Tình Huống Kiểm Thử Luật C
     const rateFace4 = face4Hits / samples;
     expect(rateFace4).toBeGreaterThan(0.2);
     expect(rateFace4).toBeLessThan(0.31);
+  });
+
+  it('19. Cờ Cá Ngựa Lượt 101+ (Tăng Tốc Toàn Diện): ưu tiên mặt lớn 5–6 khi chạy đường đua & tăng mạnh mặt về Ô ★ / đá ngựa', () => {
+    const lateRaceState = make4PlayerState();
+    lateRaceState.turnCount = LATE_GAME_TURNS_THRESHOLD + 1; // Lượt 101
+    setHorse(lateRaceState, 'red_0', { zone: 'TRACK', progress: 8 });
+    setHorse(lateRaceState, 'red_1', { zone: 'TRACK', progress: 20 });
+
+    const samples = 2400;
+    let highFaces = 0;
+    let lowFaces = 0;
+    for (let i = 0; i < samples; i += 1) {
+      const d = rollSmartHorseDice(lateRaceState);
+      if (d === 5 || d === 6) highFaces += 1;
+      if (d === 2 || d === 3) lowFaces += 1;
+    }
+    // Mặt 5–6 (×1.75) phải áp đảo rõ rệt so với mặt 2–3 (×1.0)
+    expect(highFaces / samples).toBeGreaterThan(0.38);
+    expect(highFaces).toBeGreaterThan(lowFaces * 1.45);
+
+    // Ở lượt 101+, ngựa áp sát Cửa ★ (progress 47, cần 4) có tỉ lệ ra 4 cao hơn hẳn giai đoạn đầu (~34%+)
+    const lateDoorState = make4PlayerState();
+    lateDoorState.turnCount = LATE_GAME_TURNS_THRESHOLD + 5;
+    setHorse(lateDoorState, 'red_0', { zone: 'TRACK', progress: 47 });
+    setHorse(lateDoorState, 'red_1', { zone: 'TRACK', progress: 12 });
+    let lateDoorHits = 0;
+    for (let i = 0; i < samples; i += 1) {
+      if (rollSmartHorseDice(lateDoorState) === 4) lateDoorHits += 1;
+    }
+    expect(lateDoorHits / samples).toBeGreaterThan(0.3);
   });
 });

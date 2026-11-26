@@ -10,7 +10,12 @@ import {
 import { ALL_CARDS_BY_ID, CHANCE_CARDS, FATE_CARDS } from '@/games/co-ty-phu/data/cards';
 import { generateBoardTiles } from '@/games/co-ty-phu/data/mapGenerator';
 import { createInitialGameState, reduceGameAction } from '@/games/co-ty-phu/engine/reducer';
-import { getHumanLandingTileWeight, rollSmartHumanDice } from '@/games/co-ty-phu/engine/smartDice';
+import {
+  getHumanLandingTileWeight,
+  LATE_GAME_TURNS_THRESHOLD,
+  rollMonopolyDice,
+  rollSmartHumanDice,
+} from '@/games/co-ty-phu/engine/smartDice';
 import {
   calculatePropertyRent,
   calculatePropertyTax,
@@ -565,5 +570,53 @@ describe('Cờ Tỷ Phú Engine — Bản đồ, Luật 52 Ô, 32 Thẻ, Đấu 
     expect(getHumanLandingTileWeight(weightState, p1, 42, false)).toBe(0.55); // Ô góc Vô Tù
     p1.cash = 100_000; // Không đủ tiền nâng cấp ô 1 (500K) -> hạ trọng số tránh lãng phí lượt
     expect(getHumanLandingTileWeight(weightState, p1, 1, false)).toBe(1.2);
+  });
+
+  it('Cờ Tỷ Phú Lượt 101+ (Tăng Tốc Kịch Tính): tắt né nhà đối thủ, đẩy ô thiếu thắng/bộ màu (3.2x) & áp dụng cả cho Bot', () => {
+    const state = createInitialGameState(makeSetup(2, 2, false));
+    state.turnCount = LATE_GAME_TURNS_THRESHOLD + 1; // Lượt 101
+    const p1 = state.players[0];
+    const p2 = state.players[1];
+
+    // Dựng P1 sở hữu 6/7 ô đất cạnh 1 (thiếu đúng ô 25 Cao Bằng để thắng Hàng)
+    for (const idx of [17, 18, 20, 21, 23, 24]) {
+      state.tiles[idx].ownerId = p1.id;
+    }
+    expect(getHumanLandingTileWeight(state, p1, 25, false)).toBe(3.2);
+    expect(getHumanLandingTileWeight(state, p1, 26, false)).toBe(2.8); // Sân Bay
+
+    // Nhà P1 chưa max cấp đủ tiền nâng cấp -> 2.6x
+    state.tiles[1].ownerId = p1.id;
+    state.tiles[1].buildingLevel = 1;
+    expect(getHumanLandingTileWeight(state, p1, 1, false)).toBe(2.6);
+
+    // Nhà P2 cấp cao (level 3) -> không còn né (0.42/0.18), tăng nhẹ lên 1.35 kể cả khi antiStreakActive = true!
+    state.tiles[4].ownerId = p2.id;
+    state.tiles[4].buildingLevel = 3;
+    expect(getHumanLandingTileWeight(state, p1, 4, true)).toBe(1.35);
+
+    // Nhà P2 cấp 1 -> 1.15 (không né)
+    state.tiles[5].ownerId = p2.id;
+    state.tiles[5].buildingLevel = 1;
+    expect(getHumanLandingTileWeight(state, p1, 5, true)).toBe(1.15);
+
+    // Bot AI ở Lượt 101+ cũng dùng bảng trọng số Tăng Tốc thay vì random đều
+    p1.isBot = true;
+    p1.position = 20; // 20 + 5 = ô 25 (ô thiếu thắng Hàng, trọng số 3.2)
+    // Cho các ô lân cận đã xây tối đa (trọng số 1.0) để kiểm chứng rõ xác suất dồn về ô thiếu 25
+    for (const idx of [23, 24, 27, 28, 29, 30, 31]) {
+      if (state.tiles[idx].kind === 'PROPERTY') {
+        state.tiles[idx].ownerId = p1.id;
+        state.tiles[idx].buildingLevel = 5;
+      }
+    }
+    let botHit25 = 0;
+    const samples = 2400;
+    for (let i = 0; i < samples; i += 1) {
+      const [d1, d2] = rollMonopolyDice(state, p1, { isBot: true });
+      if ((p1.position + d1 + d2) % 52 === 25) botHit25 += 1;
+    }
+    // Random 2 xúc xắc tổng = 5 có xác suất 4/36 ≈ 11.1%; với trọng số 3.2 ở Lượt 101+ sẽ nhảy lên > 18%
+    expect(botHit25 / samples).toBeGreaterThan(0.18);
   });
 });

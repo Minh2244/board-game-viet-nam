@@ -448,4 +448,101 @@ describe('Online Freeze & Long-Session Stability Audit', () => {
     expect(computeBotAction(debtState)).toBeNull();
     expect(computeBotAction(debtState, true)).toEqual({ type: 'DECLARE_BANKRUPTCY' });
   });
+
+  it('Sân Bay Online đồng bộ chính xác điểm đến kế tiếp qua deckSync.airportDestinations, không bao giờ lệch 2 máy', () => {
+    const initial = createInitialGameState({
+      slots: [
+        { slotIndex: 0, name: 'Minh', isBot: false, characterId: 'ca_phe', landColor: 'red' },
+        { slotIndex: 1, name: 'Kem', isBot: false, characterId: 'ao_dai_tim', landColor: 'purple' },
+      ],
+      diceCount: 1,
+      mapMode: 'default',
+    });
+    initial.players[0].position = 24;
+    initial.tiles[26].currentDestinationTileIndex = 10; // Điểm đến chuyến 1 = Thanh Hóa (ô 10)
+
+    const hostSnap: OnlineRoomSnapshot = {
+      roomCode: '888111',
+      phase: 'PLAYING',
+      hostToken: 'tk_host',
+      botCount: 0,
+      diceCount: 1,
+      mapMode: 'default',
+      humans: [],
+      bots: [],
+      matchState: structuredClone(initial),
+      matchVersion: 10,
+      updatedAt: Date.now(),
+    };
+    const guestSnap: OnlineRoomSnapshot = structuredClone(hostSnap);
+
+    const hostSentPackets: Record<string, unknown>[] = [];
+    const hostClient = new OnlineRoomClient({
+      roomCode: '888111',
+      playerToken: 'tk_host',
+      playerName: 'Minh',
+      isHost: true,
+      callbacks: {
+        onSnapshot: vi.fn(),
+        onStatusChange: vi.fn(),
+        onRemoteAction: vi.fn(),
+        onRoomClosed: vi.fn(),
+      },
+    });
+
+    const guestActions: number[] = [];
+    const guestClient = new OnlineRoomClient({
+      roomCode: '888111',
+      playerToken: 'tk_guest',
+      playerName: 'Kem',
+      isHost: false,
+      callbacks: {
+        onSnapshot: vi.fn(),
+        onStatusChange: vi.fn(),
+        onRemoteAction: (ev) => {
+          guestActions.push(ev.resultingState?.tiles[26].currentDestinationTileIndex ?? -1);
+        },
+        onRoomClosed: vi.fn(),
+      },
+    });
+
+    const hostInternal = hostClient as unknown as {
+      snapshot: OnlineRoomSnapshot | null;
+      sendOverFastLanes: (pkt: Record<string, unknown>) => void;
+      pushActionCommitReliable: (pkt: Record<string, unknown>) => void;
+    };
+    const guestInternal = guestClient as unknown as {
+      snapshot: OnlineRoomSnapshot | null;
+      handleIncomingPacket: (pkt: Record<string, unknown>) => void;
+    };
+
+    hostInternal.snapshot = hostSnap;
+    guestInternal.snapshot = guestSnap;
+    hostInternal.pushActionCommitReliable = (pkt) => {
+      hostSentPackets.push(pkt);
+    };
+
+    // Host tung [2] đáp đúng Sân Bay (24 + 2 = 26) -> bay tới ô 10 & random điểm đến mới khác 10
+    const action1 = { type: 'ROLL_DICE' as const, diceValues: [2], rollPower: 0.6 };
+    const afterHost1 = reduceGameAction(hostInternal.snapshot.matchState!, action1).state;
+    const hostNewAirportDest = afterHost1.tiles[26].currentDestinationTileIndex!;
+    expect(hostNewAirportDest).not.toBe(10);
+
+    hostClient.broadcastCommittedAction(action1, 0.6, afterHost1);
+    expect(hostSentPackets).toHaveLength(1);
+    const pkt1 = hostSentPackets[0] as {
+      deckSync?: { airportDestinations?: Record<number, number> };
+    };
+    expect(pkt1.deckSync?.airportDestinations?.[26]).toBe(hostNewAirportDest);
+
+    // Guest nhận gói ACTION_COMMIT (không có resultingState) -> vẫn phải cập nhật đúng điểm đến mới của Host!
+    guestInternal.handleIncomingPacket(hostSentPackets[0]);
+    expect(guestInternal.snapshot?.matchState?.tiles[26].currentDestinationTileIndex).toBe(
+      hostNewAirportDest,
+    );
+    expect(guestActions[0]).toBe(hostNewAirportDest);
+
+    hostClient.destroy();
+    guestClient.destroy();
+  });
 });

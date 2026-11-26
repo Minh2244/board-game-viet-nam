@@ -15,40 +15,44 @@ function ensureAudio(): AudioContext | null {
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
 
-  if (!gCtx) {
-    gCtx = new Ctor();
-    const comp = gCtx.createDynamicsCompressor();
-    comp.threshold.value = -14;
-    comp.knee.value = 18;
-    comp.ratio.value = 4;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.16;
+  try {
+    if (!gCtx) {
+      gCtx = new Ctor();
+      const comp = gCtx.createDynamicsCompressor();
+      comp.threshold.value = -14;
+      comp.knee.value = 18;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.004;
+      comp.release.value = 0.16;
 
-    masterBus = gCtx.createGain();
-    masterBus.gain.value = 0.94;
-    masterBus.connect(comp);
-    comp.connect(gCtx.destination);
+      masterBus = gCtx.createGain();
+      masterBus.gain.value = 0.94;
+      masterBus.connect(comp);
+      comp.connect(gCtx.destination);
 
-    // Vang phòng gỗ ấm siêu nhẹ (thay ConvolverNode FFT ~20x nhẹ CPU trên điện thoại)
-    reverbNode = createWarmRoomReverb(gCtx, {
-      delayA: 0.037,
-      delayB: 0.061,
-      feedback: 0.24,
-      lowpassHz: 2400,
-      wetGain: 0.2,
-      destination: masterBus,
-    });
+      // Vang phòng gỗ ấm siêu nhẹ (thay ConvolverNode FFT ~20x nhẹ CPU trên điện thoại)
+      reverbNode = createWarmRoomReverb(gCtx, {
+        delayA: 0.037,
+        delayB: 0.061,
+        feedback: 0.24,
+        lowpassHz: 2400,
+        wetGain: 0.2,
+        destination: masterBus,
+      });
 
-    const nLen = Math.floor(gCtx.sampleRate * 1.2);
-    noiseBuffer = gCtx.createBuffer(1, nLen, gCtx.sampleRate);
-    const nd = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < nLen; i += 1) {
-      nd[i] = Math.random() * 2 - 1;
+      const nLen = Math.floor(gCtx.sampleRate * 1.2);
+      noiseBuffer = gCtx.createBuffer(1, nLen, gCtx.sampleRate);
+      const nd = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < nLen; i += 1) {
+        nd[i] = Math.random() * 2 - 1;
+      }
     }
-  }
 
-  idleAudio.touch();
-  return gCtx;
+    idleAudio.touch();
+    return gCtx;
+  } catch {
+    return null;
+  }
 }
 
 function sendOut(node: AudioNode, wet = true): void {
